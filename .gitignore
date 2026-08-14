@@ -1,0 +1,14 @@
+*.png
+*.pdf
+*.svg
+*.bson
+*.gif
+*.log
+*.csv
+*.dat
+*.jld2
+venv/
+.venv/
+**/plots/
+**/results/
+**/data/
