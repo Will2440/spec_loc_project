@@ -11,39 +11,39 @@ isdir(outdir) || mkpath(outdir)
 # User config (EDIT THESE)
 # =====================================================================
 
-As = [1.0]
-Bs = [1.0]
-ms = [-1.0, -2.0]
+As = collect(0.5:0.5:3.0)
+Bs = collect(0.5:0.5:3.0)
+ms = collect(-5.0:0.5:1.0) #[-1.0, -2.0]
 B_ys = [1.0]
 
 perturbation_types = [:symmetric, :tilt]  # :none, :symmetric, :tilt
-disorder_types = [:none, :anderson] # :none, :anderson, :mass
+disorder_types = [:anderson] # :none, :anderson, :mass
 boundary_cond_twists = [0]
 
 Lx_ribbons = [50]
-Lx_obcs = [14]
-Ly_obcs = [14]
+Lx_obcs = [20]
+Ly_obcs = [20]
 
-gamma_vals = collect(0.0:1.0:3.0)
-W_vals = collect(0.0:0.5:1.0)
-kappa_vals = [0.2, 0.05]
+gamma_vals = collect(-3.0:0.5:3.0)
+W_vals = collect(0.0:0.5:4.0)
+kappa_vals = [2e-1]
 
 # Energy range mode
 energy_range_mode = :dynamic_band  # :fixed, :dynamic_band
 fixed_E_vals = collect(range(-5.0, 5.0; length=101))
-energy_points = 101
+energy_points = 51
 energy_margin_fraction = 0.10  # 10% padding above/below estimated extrema
-energy_scan_nk = 81            # lightweight band extrema scan grid per k-axis
+energy_scan_nk = 11            # lightweight band extrema scan grid per k-axis
 # When true, dynamic-band jobs are written at per-case granularity for
 # (A,B,m,gamma), improving HPC parallel scaling and avoiding bundled cases.
 dynamic_energy_split_cases = true
 
 # Grid resolutions for downstream calculations
-N_ky = 101
-Nkx_bulk = 81
-Nky_bulk = 81
-Nkx_3d = 61
-Nky_3d = 61
+N_ky = 101 ## for ribbon geometry
+Nkx_bulk = 81 ## for 2D bulk geometry
+Nky_bulk = 81 ## for 2D bulk geometry
+Nkx_3d = 101 ## for 3D bandstructure plot
+Nky_3d = 101 ## for 3D bandstructure plot
 
 # DOS/LDOS settings
 ldos_target_E = 0.0
@@ -80,9 +80,19 @@ seed = 1234
 # ---------------------------------------------------------------------
 # :explicit_vals_per_row  -> you set *_vals_per_row directly
 # :target_rows            -> auto-select chunk counts to approach target_number_of_rows
-allocation_mode = :explicit_vals_per_row
+allocation_mode = :target_rows
 
-target_number_of_rows = 24
+target_number_of_rows = 200
+
+# In :target_rows mode we prioritize reaching the requested output row count.
+# Per-case dynamic splitting can dominate row count and make targeting ineffective,
+# so it is disabled automatically in that mode.
+dynamic_energy_split_cases_active = dynamic_energy_split_cases
+dynamic_split_disabled_for_target_rows = false
+if allocation_mode == :target_rows && dynamic_energy_split_cases_active
+    dynamic_energy_split_cases_active = false
+    dynamic_split_disabled_for_target_rows = true
+end
 
 # Used when allocation_mode == :explicit_vals_per_row
 A_vals_per_row = max(1, length(As))
@@ -291,6 +301,71 @@ function choose_chunk_counts(lengths::Dict{Symbol, Int}, target_rows::Int)
     return nchunks
 end
 
+function effective_chunk_count(len::Int, requested_chunks::Int)
+    requested_chunks = clamp(requested_chunks, 1, max(1, len))
+    vals_per_chunk = ceil(Int, len / requested_chunks)
+    return ceil(Int, len / vals_per_chunk)
+end
+
+function emitted_rows_for_chunk_target(
+    lengths::Dict{Symbol, Int},
+    chunk_target::Int,
+    rows_per_chunk_product::Int,
+)
+    n_chunks = choose_chunk_counts(lengths, max(1, chunk_target))
+    effective_product = prod(
+        effective_chunk_count(lengths[d], n_chunks[d])
+        for d in keys(lengths)
+    )
+    return effective_product * rows_per_chunk_product
+end
+
+function nearest_allocator_rows(
+    lengths::Dict{Symbol, Int},
+    rows_per_chunk_product::Int,
+    target_rows::Int,
+)
+    target_rows = max(1, target_rows)
+    rows_per_chunk_product = max(1, rows_per_chunk_product)
+    base_chunk_target = ceil(Int, target_rows / rows_per_chunk_product)
+    max_chunk_target = prod(values(lengths))
+
+    lower = nothing
+    upper = nothing
+    seen_rows = Set{Int}()
+
+    delta = 0
+    while true
+        candidates = delta == 0 ? (base_chunk_target,) : (base_chunk_target - delta, base_chunk_target + delta)
+        for cand in candidates
+            if cand < 1 || cand > max_chunk_target
+                continue
+            end
+            rows = emitted_rows_for_chunk_target(lengths, cand, rows_per_chunk_product)
+            if rows in seen_rows
+                continue
+            end
+            push!(seen_rows, rows)
+            if rows <= target_rows && (lower === nothing || rows > lower)
+                lower = rows
+            end
+            if rows >= target_rows && (upper === nothing || rows < upper)
+                upper = rows
+            end
+        end
+
+        if lower !== nothing && upper !== nothing
+            break
+        end
+        if base_chunk_target - delta <= 1 && base_chunk_target + delta >= max_chunk_target
+            break
+        end
+        delta += 1
+    end
+
+    return lower, upper
+end
+
 # =====================================================================
 # Lightweight analytic band-edge estimator (for dynamic E range)
 # =====================================================================
@@ -389,6 +464,39 @@ chunk_lengths = Dict(
 
 vals_per_row = Dict{Symbol, Int}()
 
+# Rows are emitted per (chunk tuple) multiplied by fixed outer combinations.
+# Compute the fixed multiplier so target_rows can map to a chunk-product target.
+specloc_points_per_outer_combo = sum(
+    begin
+        pts = build_specloc_points(
+            specloc_mode,
+            Lx_obc,
+            Ly_obc;
+            base_x=specloc_x,
+            base_y=specloc_y,
+            res_x=specloc_resolution_x,
+            res_y=specloc_resolution_y,
+            outside_frac=specloc_outside_fraction,
+            centre_frac=specloc_centre_fraction,
+            mid_edge_frac=specloc_mid_edge_fraction,
+            corner_frac=specloc_corner_fraction,
+        )
+        pts = uniquify_points(pts)
+        isempty(pts) && error("specloc_mode=$(specloc_mode) generated zero points for Lx=$(Lx_obc), Ly=$(Ly_obc)")
+        length(pts)
+    end
+    for Lx_obc in Lx_obcs, Ly_obc in Ly_obcs
+)
+
+fixed_outer_combos =
+    length(B_ys) *
+    length(perturbation_types) *
+    length(disorder_types) *
+    length(boundary_cond_twists) *
+    length(Lx_ribbons)
+
+rows_per_chunk_product = fixed_outer_combos * specloc_points_per_outer_combo
+
 if allocation_mode == :explicit_vals_per_row
     vals_per_row[:A] = max(1, A_vals_per_row)
     vals_per_row[:B] = max(1, B_vals_per_row)
@@ -397,7 +505,8 @@ if allocation_mode == :explicit_vals_per_row
     vals_per_row[:W] = max(1, W_vals_per_row)
     vals_per_row[:kappa] = max(1, kappa_vals_per_row)
 elseif allocation_mode == :target_rows
-    n_chunks = choose_chunk_counts(chunk_lengths, target_number_of_rows)
+    chunk_product_target = ceil(Int, target_number_of_rows / max(1, rows_per_chunk_product))
+    n_chunks = choose_chunk_counts(chunk_lengths, max(1, chunk_product_target))
     vals_per_row[:A] = ceil(Int, length(As) / n_chunks[:A])
     vals_per_row[:B] = ceil(Int, length(Bs) / n_chunks[:B])
     vals_per_row[:m] = ceil(Int, length(ms) / n_chunks[:m])
@@ -422,6 +531,16 @@ kappa_chunks = chunk_vector(kappa_vals, vals_per_row[:kappa]; mode=split_mode)
 rows = NamedTuple[]
 row_energy_bounds = Tuple{Float64, Float64}[]
 specloc_counts_per_geometry = Int[]
+
+nearest_target_rows_lower = nothing
+nearest_target_rows_upper = nothing
+if allocation_mode == :target_rows
+    nearest_target_rows_lower, nearest_target_rows_upper = nearest_allocator_rows(
+        chunk_lengths,
+        rows_per_chunk_product,
+        target_number_of_rows,
+    )
+end
 
 for A_chunk in A_chunks,
     B_chunk in B_chunks,
@@ -459,10 +578,10 @@ for A_chunk in A_chunks,
 
     # For dynamic E mode, optionally split (A,B,m,gamma) so each emitted row maps
     # to one physical case and can receive its own energy range in main.jl.
-    A_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases) ? [[a] for a in A_chunk] : [A_chunk]
-    B_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases) ? [[b] for b in B_chunk] : [B_chunk]
-    m_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases) ? [[mm] for mm in m_chunk] : [m_chunk]
-    gamma_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases) ? [[g] for g in gamma_chunk] : [gamma_chunk]
+    A_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases_active) ? [[a] for a in A_chunk] : [A_chunk]
+    B_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases_active) ? [[b] for b in B_chunk] : [B_chunk]
+    m_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases_active) ? [[mm] for mm in m_chunk] : [m_chunk]
+    gamma_groups = (energy_range_mode == :dynamic_band && dynamic_energy_split_cases_active) ? [[g] for g in gamma_chunk] : [gamma_chunk]
 
     for A_group in A_groups,
         B_group in B_groups,
@@ -582,12 +701,20 @@ global_emax = -Inf
 println("\n================ Parameter Prep Summary ================")
 println("Output file: $(out_file)")
 println("Rows: $(length(rows))")
+if allocation_mode == :target_rows
+    println("Target rows requested: $(target_number_of_rows)")
+    println("Nearest achievable rows: lower=$(nearest_target_rows_lower), upper=$(nearest_target_rows_upper)")
+end
 println("Allocation mode: $(allocation_mode)")
 println("Split mode: $(split_mode)")
 println("Energy mode: $(energy_range_mode)")
 println("Energy margin fraction: $(energy_margin_fraction)")
 println("Energy scan nk: $(energy_scan_nk)")
-println("Dynamic energy split cases: $(dynamic_energy_split_cases)")
+println("Dynamic energy split cases (configured): $(dynamic_energy_split_cases)")
+println("Dynamic energy split cases (active): $(dynamic_energy_split_cases_active)")
+if dynamic_split_disabled_for_target_rows
+    println("  note: disabled in :target_rows mode so row targeting remains effective")
+end
 println("Specloc mode: $(specloc_mode)")
 println("--------------------------------------------------------")
 println("Ranges:    min - max - count")
