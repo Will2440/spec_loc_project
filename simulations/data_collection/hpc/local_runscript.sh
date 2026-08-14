@@ -54,15 +54,7 @@ NUM_ROWS=$(tail -n +2 "$PARAMS_FILE" | wc -l | tr -d ' ')
 RUN_ID="local_$(date +%Y%m%d_%H%M%S)_rows${NUM_ROWS}"
 RESULTS_DIR="results/${RUN_ID}"
 
-echo "=========================================="
-echo "Local Parallel Batch Runner"
-echo "=========================================="
-echo "Params file: $PARAMS_FILE"
-echo "Total rows:  $NUM_ROWS"
-echo "Parallel jobs: $NUM_JOBS"
-echo "Run ID: $RUN_ID"
-echo "Output dir: $RESULTS_DIR"
-echo "=========================================="
+echo "Output: $RESULTS_DIR"
 echo ""
 
 if [ "$NUM_ROWS" -eq 0 ]; then
@@ -70,20 +62,75 @@ if [ "$NUM_ROWS" -eq 0 ]; then
     exit 1
 fi
 
-# Check for xargs or fall back to sequential
+# Create temp directory for progress tracking
+PROGRESS_DIR=$(mktemp -d)
+trap "rm -rf $PROGRESS_DIR" EXIT
+
+# Progress bar function
+show_progress() {
+    local completed=$1
+    local total=$2
+    local start_time=$3
+    
+    local percent=$((completed * 100 / total))
+    local bar_size=20
+    local filled=$((percent * bar_size / 100))
+    local empty=$((bar_size - filled))
+    
+    # Build progress bar
+    local bar="["
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    bar+="]"
+    
+    # Calculate ETA
+    local elapsed=$(($(date +%s) - start_time))
+    local rate=0
+    if [ $completed -gt 0 ]; then
+        rate=$((elapsed / completed))
+    fi
+    
+    local remaining=$((total - completed))
+    local eta_seconds=$((remaining * rate))
+    
+    local eta_str=""
+    if [ $eta_seconds -gt 0 ]; then
+        local eta_mins=$((eta_seconds / 60))
+        local eta_secs=$((eta_seconds % 60))
+        if [ $eta_mins -gt 0 ]; then
+            eta_str=$(printf "ETA: %dm%02ds" $eta_mins $eta_secs)
+        else
+            eta_str=$(printf "ETA: %ds" $eta_secs)
+        fi
+    fi
+    
+    printf "\r%-50s %3d%% [%d/%d] %s" "$bar" "$percent" "$completed" "$total" "$eta_str"
+}
+
+# Start time
+START_TIME=$(date +%s)
+
+# Run jobs with progress tracking
 if command -v xargs >/dev/null 2>&1; then
-    echo "Using xargs for job distribution"
     seq 1 "$NUM_ROWS" | xargs -P "$NUM_JOBS" -I {} \
-        bash -c 'row="$1"; echo "[Row ${row}/'"$NUM_ROWS"'] Starting..."; SPECLOC_RUN_ID="'"$RUN_ID"'" julia --startup-file=no main.jl "$row" "'"$PARAMS_FILE"'" 2>&1 | sed "s/^/[Row ${row}] /"' _ {}
+        bash -c 'row="$1"; SPECLOC_RUN_ID="'"$RUN_ID"'" julia --startup-file=no main.jl "$row" "'"$PARAMS_FILE"'" >/dev/null 2>&1; touch "'"$PROGRESS_DIR"'/done_${row}"' _ {}
+    
+    # Monitor progress
+    completed=0
+    while [ $completed -lt $NUM_ROWS ]; do
+        completed=$(ls -1 "$PROGRESS_DIR" 2>/dev/null | wc -l)
+        show_progress $completed $NUM_ROWS $START_TIME
+        if [ $completed -lt $NUM_ROWS ]; then
+            sleep 0.5
+        fi
+    done
+    show_progress $NUM_ROWS $NUM_ROWS $START_TIME
+    echo ""
 else
     echo "Warning: xargs not found, running sequentially (slow)"
     for row in $(seq 1 "$NUM_ROWS"); do
-        echo "[Row $row/$NUM_ROWS] Starting..."
         SPECLOC_RUN_ID="$RUN_ID" julia --startup-file=no main.jl "$row" "$PARAMS_FILE"
+        show_progress $row $NUM_ROWS $START_TIME
     done
+    echo ""
 fi
-
-echo ""
-echo "=========================================="
-echo "All rows completed!"
-echo "=========================================="
