@@ -320,49 +320,41 @@ function emitted_rows_for_chunk_target(
     return effective_product * rows_per_chunk_product
 end
 
-function nearest_allocator_rows(
+function nearest_neighbor_rows(
     lengths::Dict{Symbol, Int},
     rows_per_chunk_product::Int,
-    target_rows::Int,
+    actual_rows::Int,
 )
-    target_rows = max(1, target_rows)
+    # Find achievable row counts just below and just above actual_rows.
     rows_per_chunk_product = max(1, rows_per_chunk_product)
-    base_chunk_target = ceil(Int, target_rows / rows_per_chunk_product)
     max_chunk_target = prod(values(lengths))
-
+    
     lower = nothing
     upper = nothing
-    seen_rows = Set{Int}()
-
-    delta = 0
-    while true
-        candidates = delta == 0 ? (base_chunk_target,) : (base_chunk_target - delta, base_chunk_target + delta)
-        for cand in candidates
-            if cand < 1 || cand > max_chunk_target
-                continue
-            end
-            rows = emitted_rows_for_chunk_target(lengths, cand, rows_per_chunk_product)
-            if rows in seen_rows
-                continue
-            end
-            push!(seen_rows, rows)
-            if rows <= target_rows && (lower === nothing || rows > lower)
-                lower = rows
-            end
-            if rows >= target_rows && (upper === nothing || rows < upper)
-                upper = rows
-            end
+    seen_rows = Dict{Int, Int}()  # rows -> chunk_target that produced them
+    
+    # Sample all practical chunk targets
+    for chunk_target in 1:max_chunk_target
+        rows = emitted_rows_for_chunk_target(lengths, chunk_target, rows_per_chunk_product)
+        if !haskey(seen_rows, rows)
+            seen_rows[rows] = chunk_target
         end
-
-        if lower !== nothing && upper !== nothing
-            break
-        end
-        if base_chunk_target - delta <= 1 && base_chunk_target + delta >= max_chunk_target
-            break
-        end
-        delta += 1
     end
-
+    
+    # Find neighbors of actual_rows
+    sorted_rows = sort(collect(keys(seen_rows)))
+    for (i, r) in enumerate(sorted_rows)
+        if r == actual_rows
+            if i > 1
+                lower = sorted_rows[i - 1]
+            end
+            if i < length(sorted_rows)
+                upper = sorted_rows[i + 1]
+            end
+            break
+        end
+    end
+    
     return lower, upper
 end
 
@@ -532,16 +524,6 @@ rows = NamedTuple[]
 row_energy_bounds = Tuple{Float64, Float64}[]
 specloc_counts_per_geometry = Int[]
 
-nearest_target_rows_lower = nothing
-nearest_target_rows_upper = nothing
-if allocation_mode == :target_rows
-    nearest_target_rows_lower, nearest_target_rows_upper = nearest_allocator_rows(
-        chunk_lengths,
-        rows_per_chunk_product,
-        target_number_of_rows,
-    )
-end
-
 for A_chunk in A_chunks,
     B_chunk in B_chunks,
     m_chunk in m_chunks,
@@ -624,6 +606,17 @@ for A_chunk in A_chunks,
     end
 end
 
+# Compute neighbors for the actual output row count
+nearest_target_rows_lower = nothing
+nearest_target_rows_upper = nothing
+if allocation_mode == :target_rows
+    nearest_target_rows_lower, nearest_target_rows_upper = nearest_neighbor_rows(
+        chunk_lengths,
+        rows_per_chunk_product,
+        length(rows),
+    )
+end
+
 # =====================================================================
 # Save .dat
 # =====================================================================
@@ -703,7 +696,7 @@ println("Output file: $(out_file)")
 println("Rows: $(length(rows))")
 if allocation_mode == :target_rows
     println("Target rows requested: $(target_number_of_rows)")
-    println("Nearest achievable rows: lower=$(nearest_target_rows_lower), upper=$(nearest_target_rows_upper)")
+    println("Achievable neighbors: lower=$(nearest_target_rows_lower), upper=$(nearest_target_rows_upper)")
 end
 println("Allocation mode: $(allocation_mode)")
 println("Split mode: $(split_mode)")
