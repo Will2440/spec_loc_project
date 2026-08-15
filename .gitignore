@@ -12,3 +12,4 @@ venv/
 **/plots/
 **/results/
 **/data/
+*.out
