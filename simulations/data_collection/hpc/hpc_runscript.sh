@@ -1,12 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=SpecLoc_QWZ
+#SBATCH --job-name=SpecLoc_QWZ_noW
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --partition=compute
 #SBATCH --cpus-per-task=1
 #SBATCH --account=phys030424
-#SBATCH --array=1-1
-#SBATCH --time=01:00:00
-#SBATCH --mem=8G
+#SBATCH --array=1-200
+#SBATCH --time=05:00:00
+#SBATCH --mem=1G
 
 set -euo pipefail
 
