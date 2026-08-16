@@ -5,31 +5,35 @@ Strip data-heavy eigensystems from JLD2 result files saved by the spectral local
 Removes Hamiltonian matrices and eigenvectors to reclaim disk space while preserving
 all computed observables (specloc gap/signature, DOS/LDOS, ribbon spectra, band structure).
 
+Creates a parallel folder structure with .stripped appended to the folder name, allowing
+stripped and original datasets to be processed and managed independently.
+
 Usage:
-    julia qwz_data_stripper.jl <job_folder_path> [--inplace]
+    julia qwz_data_stripper.jl <job_folder_path>
 
     job_folder_path: Path to folder containing subfolders with .jld2 result files
-    --inplace:       Replace original files instead of creating .stripped.jld2 copies (default: safe mode with copies)
 
 Example:
     julia qwz_data_stripper.jl /path/to/job_results
-    julia qwz_data_stripper.jl /path/to/job_results --inplace
+    
+    This creates: /path/to/job_results.stripped/
+    with identical folder structure and .stripped.jld2 files
 """
 
 using JLD2
 using Printf
 
-function strip_result_file(filepath::String; inplace::Bool=false)
+function strip_result_file(input_filepath::String, output_filepath::String)
     """
-    Load a result file, strip heavy data, and save it back (or to new file).
+    Load a result file, strip heavy data, and save to output path.
     Returns: (original_size_mb, stripped_size_mb, success::Bool, message::String)
     """
     try
         # Get original file size
-        original_size = filesize(filepath) / (1024^2)  # Convert to MB
+        original_size = filesize(input_filepath) / (1024^2)  # Convert to MB
         
         # Load the data
-        data = load(filepath)
+        data = load(input_filepath)
         
         # Verify structure
         if !haskey(data, "hamiltonian_eigensystems") && !haskey(data, "localiser_eigensystems")
@@ -63,19 +67,14 @@ function strip_result_file(filepath::String; inplace::Bool=false)
             end
         end
         
-        # Determine output path
-        if inplace
-            output_path = filepath
-        else
-            # Create .stripped.jld2 version
-            output_path = replace(filepath, ".jld2" => ".stripped.jld2")
-        end
+        # Ensure output directory exists
+        mkpath(dirname(output_filepath))
         
         # Save stripped data
-        save(output_path, data)
+        save(output_filepath, data)
         
         # Get new file size
-        stripped_size = filesize(output_path) / (1024^2)  # Convert to MB
+        stripped_size = filesize(output_filepath) / (1024^2)  # Convert to MB
         
         return original_size, stripped_size, true, "Success"
         
@@ -103,22 +102,25 @@ function main()
     # Parse command line arguments
     if length(ARGS) < 1
         println("""
-        Usage: julia qwz_data_stripper.jl <job_folder_path> [--inplace]
+        Usage: julia qwz_data_stripper.jl <job_folder_path>
         
         job_folder_path: Path to folder containing subfolders with .jld2 result files
-        --inplace:       Replace original files (default: create .stripped.jld2 copies)
+        
+        Creates: <job_folder_path>.stripped/ with identical structure and .stripped.jld2 files
         """)
         exit(1)
     end
     
     job_folder = ARGS[1]
-    inplace = any(arg == "--inplace" for arg in ARGS[2:end])
     
     # Validate path
     if !isdir(job_folder)
         println("ERROR: Directory not found: $job_folder")
         exit(1)
     end
+    
+    # Create output folder at same level
+    output_root = job_folder * ".stripped"
     
     # Find all .jld2 files
     println("Scanning for .jld2 files in: $job_folder")
@@ -130,11 +132,7 @@ function main()
     end
     
     println("Found $(length(jld2_files)) .jld2 files to process")
-    if !inplace
-        println("Running in SAFE MODE: creating .stripped.jld2 copies (originals preserved)")
-    else
-        println("Running in INPLACE MODE: replacing original files")
-    end
+    println("Output folder: $output_root")
     println()
     
     # Process files
@@ -144,11 +142,16 @@ function main()
     failed = 0
     failures = Tuple{String, String}[]
     
-    for (i, filepath) in enumerate(jld2_files)
-        rel_path = relpath(filepath, job_folder)
+    for (i, input_filepath) in enumerate(jld2_files)
+        # Get relative path from job_folder
+        rel_path = relpath(input_filepath, job_folder)
+        
+        # Create output path with .stripped filename
+        output_filepath = joinpath(output_root, replace(rel_path, ".jld2" => ".stripped.jld2"))
+        
         print("[$i/$(length(jld2_files))] Processing: $rel_path ... ")
         
-        orig_size, strip_size, success, msg = strip_result_file(filepath; inplace=inplace)
+        orig_size, strip_size, success, msg = strip_result_file(input_filepath, output_filepath)
         
         if success
             total_original += orig_size
@@ -189,10 +192,11 @@ function main()
         end
     end
     
-    if !inplace && successful > 0
+    if successful > 0
         println()
-        println("Original files preserved. Stripped versions saved as .stripped.jld2")
-        println("Verify the stripped files before deleting originals.")
+        println("Original folder preserved: $job_folder")
+        println("Stripped folder created: $output_root")
+        println("Verify the stripped version before deleting the original folder.")
     end
     
     exit(failed > 0 ? 1 : 0)
