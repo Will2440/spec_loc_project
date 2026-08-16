@@ -44,6 +44,11 @@ Base.@kwdef struct SolverCaseConfig
     specloc_x::Int = 7
     specloc_y::Int = 7
     seed::Int = 0
+
+    # Storage controls for expensive eigensystems
+    save_hamiltonian_matrices::Bool = true
+    save_full_hamiltonian_eigensystems::Bool = true
+    save_full_localiser_eigensystems::Bool = false
 end
 
 site_index_qwz(x::Int, y::Int, orb::Int, Lx::Int, Ly::Int) = 2 * ((y - 1) * Lx + (x - 1)) + orb
@@ -234,6 +239,48 @@ function build_position_operators(Lx::Int, Ly::Int)
     return Diagonal(ComplexF64.(xvec)), Diagonal(ComplexF64.(yvec))
 end
 
+function build_localiser_matrix(
+    Hshift::AbstractMatrix{ComplexF64},
+    Ablock::AbstractMatrix{ComplexF64},
+    Bblock::AbstractMatrix{ComplexF64},
+)
+    return [Hshift  Ablock - im * Bblock;
+            Ablock + im * Bblock  -Hshift]
+end
+
+function spectral_localiser_signature_gap_from_blocks(
+    Hshift::AbstractMatrix{ComplexF64},
+    Ablock::AbstractMatrix{ComplexF64},
+    Bblock::AbstractMatrix{ComplexF64};
+    zero_tol::Real=1e-12,
+)
+    L = build_localiser_matrix(Hshift, Ablock, Bblock)
+    vals = eigvals(Hermitian(L))
+    revals = real(vals)
+    npos = count(>(zero_tol), revals)
+    nneg = count(<(-zero_tol), revals)
+    minabs = minimum(abs.(revals))
+    signature = npos - nneg
+    return signature, minabs, vals
+end
+
+function spectral_localiser_eigendecomp_from_blocks(
+    Hshift::AbstractMatrix{ComplexF64},
+    Ablock::AbstractMatrix{ComplexF64},
+    Bblock::AbstractMatrix{ComplexF64};
+    zero_tol::Real=1e-12,
+)
+    L = build_localiser_matrix(Hshift, Ablock, Bblock)
+    F = eigen(Hermitian(L))
+    vals = F.values
+    revals = real(vals)
+    npos = count(>(zero_tol), revals)
+    nneg = count(<(-zero_tol), revals)
+    minabs = minimum(abs.(revals))
+    signature = npos - nneg
+    return signature, minabs, vals, F.vectors
+end
+
 function spectral_localiser_signature_gap(
     H::AbstractMatrix{ComplexF64},
     X::Diagonal,
@@ -253,16 +300,7 @@ function spectral_localiser_signature_gap(
     Ablock = kappa * (Xmat - x0 * I_D)
     Bblock = kappa * (Ymat - y0 * I_D)
 
-    L = [Hshift  Ablock - im * Bblock;
-         Ablock + im * Bblock  -Hshift]
-
-    vals = eigvals(Hermitian(L))
-    revals = real(vals)
-    npos = count(>(zero_tol), revals)
-    nneg = count(<(-zero_tol), revals)
-    minabs = minimum(abs.(revals))
-    signature = npos - nneg
-    return signature, minabs, vals
+    return spectral_localiser_signature_gap_from_blocks(Hshift, Ablock, Bblock; zero_tol=zero_tol)
 end
 
 function compute_state_ipr(state::AbstractVector{<:Number})
@@ -525,34 +563,50 @@ function run_case(cfg::SolverCaseConfig)
 
     pair_index(gi, wi) = (gi - 1) * nW + wi
 
+    D = 2 * cfg.Lx_obc * cfg.Ly_obc
+    I_D = Matrix{ComplexF64}(I, D, D)
+    Xmat = Matrix(X)
+    Ymat = Matrix(Y)
+    Xshift_base = Xmat - x0 * I_D
+    Yshift_base = Ymat - y0 * I_D
+    Ablocks = [kappa * Xshift_base for kappa in kappas]
+    Bblocks = [kappa * Yshift_base for kappa in kappas]
+
+    localiser_eigvals = cfg.save_full_localiser_eigensystems ? Array{Vector{Float64}}(undef, ng, nW, nk, nE) : nothing
+    localiser_eigvecs = cfg.save_full_localiser_eigensystems ? Array{Matrix{ComplexF64}}(undef, ng, nW, nk, nE) : nothing
+
     for gi in 1:ng, wi in 1:nW
         H = H_cache[pair_index(gi, wi)]
-        for ki in 1:nk, ei in 1:nE
-            sig, gap, _ = spectral_localiser_signature_gap(H, X, Y, x0, y0, Es[ei]; kappa=kappas[ki])
-            specloc_signature[gi, wi, ki, ei] = sig
-            specloc_gap[gi, wi, ki, ei] = gap
+        for ei in 1:nE
+            Hshift = H - Es[ei] * I_D
+            for ki in 1:nk
+                Ablock = Ablocks[ki]
+                Bblock = Bblocks[ki]
+
+                if cfg.save_full_localiser_eigensystems
+                    sig, gap, vals, vecs = spectral_localiser_eigendecomp_from_blocks(Hshift, Ablock, Bblock)
+                    localiser_eigvals[gi, wi, ki, ei] = collect(real(vals))
+                    localiser_eigvecs[gi, wi, ki, ei] = vecs
+                else
+                    sig, gap, vals = spectral_localiser_signature_gap_from_blocks(Hshift, Ablock, Bblock)
+                end
+
+                specloc_signature[gi, wi, ki, ei] = sig
+                specloc_gap[gi, wi, ki, ei] = gap
+
+                # Reuse spectra from the main scan for reference cuts to avoid
+                # recomputing the same expensive localiser eigensolves.
+                if wi == iW0 && ki == ik0 && ei == iE0
+                    spectrum_vs_gamma[gi] = sort(real(vals))
+                end
+                if gi == ig0 && ki == ik0 && ei == iE0
+                    spectrum_vs_W[wi] = sort(real(vals))
+                end
+                if gi == ig0 && wi == iW0 && ei == iE0
+                    spectrum_vs_kappa[ki] = sort(real(vals))
+                end
+            end
         end
-    end
-
-    # Spectrum cut vs gamma (fixed W,kappa,E)
-    for gi in 1:ng
-        H = H_cache[pair_index(gi, iW0)]
-        _, _, vals = spectral_localiser_signature_gap(H, X, Y, x0, y0, Es[iE0]; kappa=kappas[ik0])
-        spectrum_vs_gamma[gi] = sort(real(vals))
-    end
-
-    # Spectrum cut vs W (fixed gamma,kappa,E)
-    for wi in 1:nW
-        H = H_cache[pair_index(ig0, wi)]
-        _, _, vals = spectral_localiser_signature_gap(H, X, Y, x0, y0, Es[iE0]; kappa=kappas[ik0])
-        spectrum_vs_W[wi] = sort(real(vals))
-    end
-
-    # Spectrum cut vs kappa (fixed gamma,W,E)
-    H0 = H_cache[pair_index(ig0, iW0)]
-    for ki in 1:nk
-        _, _, vals = spectral_localiser_signature_gap(H0, X, Y, x0, y0, Es[iE0]; kappa=kappas[ki])
-        spectrum_vs_kappa[ki] = sort(real(vals))
     end
 
     # OBC eigensystem at reference disorder strength for DOS / LDOS
@@ -590,6 +644,19 @@ function run_case(cfg::SolverCaseConfig)
             Nky=cfg.Nky_3d,
         )
     end
+
+    hamiltonian_saved = Dict(
+        "gamma_w_pairs" => gamma_w_pairs,
+        "matrices" => cfg.save_hamiltonian_matrices ? H_cache : nothing,
+        "eigenvalues" => cfg.save_full_hamiltonian_eigensystems ? [collect(real(F.values)) for F in eig_cache] : nothing,
+        "eigenvectors" => cfg.save_full_hamiltonian_eigensystems ? [F.vectors for F in eig_cache] : nothing,
+    )
+
+    localiser_saved = Dict(
+        "full_saved" => cfg.save_full_localiser_eigensystems,
+        "eigenvalues" => cfg.save_full_localiser_eigensystems ? localiser_eigvals : nothing,
+        "eigenvectors" => cfg.save_full_localiser_eigensystems ? localiser_eigvecs : nothing,
+    )
 
     return Dict(
         "metadata" => Dict(
@@ -629,6 +696,8 @@ function run_case(cfg::SolverCaseConfig)
             "ldos_lowest" => ldos_lowest,
             "ldos_target_E" => cfg.ldos_target_E,
         ),
+        "hamiltonian_eigensystems" => hamiltonian_saved,
+        "localiser_eigensystems" => localiser_saved,
         "ribbon_by_gamma" => ribbon_by_gamma,
         "band3d_by_gamma" => band3d_by_gamma,
     )
