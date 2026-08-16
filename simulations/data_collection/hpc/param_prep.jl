@@ -17,7 +17,7 @@ ms = collect(-5.0:0.5:1.0) #[-1.0, -2.0]
 B_ys = [1.0]
 
 perturbation_types = [:symmetric, :tilt]  # :none, :symmetric, :tilt
-disorder_types = [:anderson] # :none, :anderson, :mass
+disorder_types = [:none] # :none, :anderson, :mass
 boundary_cond_twists = [0]
 
 Lx_ribbons = [50]
@@ -25,7 +25,7 @@ Lx_obcs = [20]
 Ly_obcs = [20]
 
 gamma_vals = collect(-3.0:0.5:3.0)
-W_vals = collect(0.0:0.5:4.0)
+W_vals = [0.0] #collect(0.0:0.5:4.0)
 kappa_vals = [2e-1]
 
 # Energy range mode
@@ -688,6 +688,12 @@ for r in rows
     push!(row_combo_counts, ncomb)
 end
 
+saved_chunk_counts = Int[]
+for r in rows
+    nchunk = length(r.As) * length(r.Bs) * length(r.ms) * length(r.gamma_vals)
+    push!(saved_chunk_counts, nchunk)
+end
+
 global_emin = Inf
 global_emax = -Inf
 
@@ -734,6 +740,8 @@ println("  y-range=$(minimum(getindex.(rows, :specloc_y))) to $(maximum(getindex
 println("--------------------------------------------------------")
 println("Per-row combinations (A*B*m*gamma*W*kappa*E):")
 println("  min=$(minimum(row_combo_counts)), mean=$(round(mean(row_combo_counts), digits=1)), max=$(maximum(row_combo_counts))")
+println("Per-row saved chunks (A*B*m*gamma):")
+println("  min=$(minimum(saved_chunk_counts)), mean=$(round(mean(saved_chunk_counts), digits=1)), max=$(maximum(saved_chunk_counts))")
 println("Energy computation:")
 if energy_range_mode == :fixed
     println("  mode: fixed E range [$(minimum(fixed_E_vals)), $(maximum(fixed_E_vals))], points=$(length(fixed_E_vals))")

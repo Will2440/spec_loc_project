@@ -1,5 +1,6 @@
 using Dates
 using DelimitedFiles
+using Printf
 using JLD2: @save
 
 project_root = @__DIR__
@@ -145,6 +146,24 @@ function resolve_run_id(row_index::Int)
     return Dates.format(now(), "yyyymmdd_HHMMSS") * "_r$(row_index)"
 end
 
+function format_duration(seconds::Real)
+    total = max(0, round(Int, seconds))
+    h = total ÷ 3600
+    m = (total % 3600) ÷ 60
+    s = total % 60
+    return @sprintf("%02d:%02d:%02d", h, m, s)
+end
+
+function stdout_is_tty()
+    if isdefined(Base, :isatty)
+        return Base.isatty(stdout)
+    elseif isdefined(Base, :Libc) && isdefined(Base.Libc, :isatty)
+        return Base.Libc.isatty(1) != 0
+    else
+        return false
+    end
+end
+
 function run_row(row_index::Int, params_path::String)
     rows = read_parameter_rows(params_path)
     row_index < 1 && error("row_index must be >= 1")
@@ -156,7 +175,14 @@ function run_row(row_index::Int, params_path::String)
     out_dir = joinpath(project_root, "results", run_id)
     isdir(out_dir) || mkpath(out_dir)
 
+    total_chunks = length(row.As) * length(row.Bs) * length(row.ms) * length(row.gamma_vals)
+    println("Row $(row_index): total chunks=$(total_chunks)")
+
     chunk_index = 0
+    row_start_time = time()
+    last_chunk_time = row_start_time
+    cumulative_chunk_time = 0.0
+
     for A in row.As, B in row.Bs, m in row.ms, gamma in row.gamma_vals
         chunk_index += 1
         # Compute energy range per individual (A,B,m,gamma) case.
@@ -209,14 +235,44 @@ function run_row(row_index::Int, params_path::String)
             "row$(row_index)_chunk$(chunk_index)_A$(A)_B$(B)_m$(m)_g$(gamma)_pt$(row.perturbation_type)_dt$(row.disorder_type)_sx$(row.specloc_x)_sy$(row.specloc_y).jld2",
         )
         @save filename result
-        println("Saved: $(filename)")
+
+        now_t = time()
+        chunk_time = now_t - last_chunk_time
+        cumulative_chunk_time += chunk_time
+        avg_chunk_time = cumulative_chunk_time / chunk_index
+        remaining_chunks = total_chunks - chunk_index
+        eta_seconds = remaining_chunks * avg_chunk_time
+
+        progress_line = @sprintf(
+            "[Row %d] chunk %d/%d | dt=%.1fs | avg=%.1fs | ETA=%s",
+            row_index,
+            chunk_index,
+            total_chunks,
+            chunk_time,
+            avg_chunk_time,
+            format_duration(eta_seconds),
+        )
+
+        if stdout_is_tty()
+            print("\r" * progress_line)
+        else
+            println(progress_line)
+        end
+        flush(stdout)
+
+        last_chunk_time = now_t
     end
 
-    println("Run complete. Output directory: $(out_dir)")
+    if stdout_is_tty()
+        println()
+    end
+
+    total_time = time() - row_start_time
+    println(@sprintf("[Row %d] completed %d/%d chunks in %s | avg=%.1fs", row_index, chunk_index, total_chunks, format_duration(total_time), total_time / max(chunk_index, 1)))
 end
 
 function main()
-    if isempty(ARGS)
+    if length(ARGS) < 1
         println("Usage:")
         println("  julia main.jl <row_index> [params_file]")
         return
