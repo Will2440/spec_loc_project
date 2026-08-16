@@ -23,6 +23,56 @@ Example:
 using JLD2
 using Printf
 
+function find_present_key(d::AbstractDict, key::String)
+    if haskey(d, key)
+        return key
+    end
+    sym = Symbol(key)
+    if haskey(d, sym)
+        return sym
+    end
+    return nothing
+end
+
+function strip_payload!(payload::AbstractDict)
+    changed = false
+
+    ham_key = find_present_key(payload, "hamiltonian_eigensystems")
+    if ham_key !== nothing
+        ham_sys = payload[ham_key]
+        if ham_sys isa AbstractDict
+            gamma_pairs_key = find_present_key(ham_sys, "gamma_w_pairs")
+            gamma_pairs = gamma_pairs_key === nothing ? nothing : ham_sys[gamma_pairs_key]
+
+            payload[ham_key] = Dict(
+                "gamma_w_pairs" => gamma_pairs,
+                "matrices" => nothing,
+                "eigenvalues" => nothing,
+                "eigenvectors" => nothing,
+            )
+            changed = true
+        end
+    end
+
+    loc_key = find_present_key(payload, "localiser_eigensystems")
+    if loc_key !== nothing
+        loc_sys = payload[loc_key]
+        if loc_sys isa AbstractDict
+            full_saved_key = find_present_key(loc_sys, "full_saved")
+            full_saved = full_saved_key === nothing ? false : loc_sys[full_saved_key]
+
+            payload[loc_key] = Dict(
+                "full_saved" => full_saved,
+                "eigenvalues" => nothing,
+                "eigenvectors" => nothing,
+            )
+            changed = true
+        end
+    end
+
+    return changed
+end
+
 function strip_result_file(input_filepath::String, output_filepath::String)
     """
     Load a result file, strip heavy data, and save to output path.
@@ -35,43 +85,40 @@ function strip_result_file(input_filepath::String, output_filepath::String)
         # Load the data
         data = load(input_filepath)
         
-        # Verify structure
-        if !haskey(data, "hamiltonian_eigensystems") && !haskey(data, "localiser_eigensystems")
-            return original_size, original_size, false, "File structure unrecognized (missing expected keys)"
-        end
-        
-        # Strip Hamiltonian eigensystems (but keep gamma_w_pairs for reference)
-        if haskey(data, "hamiltonian_eigensystems")
-            ham_sys = data["hamiltonian_eigensystems"]
-            if isa(ham_sys, Dict)
-                # Keep gamma_w_pairs, delete matrices and eigendecompositions
-                stripped_ham = Dict(
-                    "gamma_w_pairs" => get(ham_sys, "gamma_w_pairs", nothing),
-                    "matrices" => nothing,
-                    "eigenvalues" => nothing,
-                    "eigenvectors" => nothing,
-                )
-                data["hamiltonian_eigensystems"] = stripped_ham
+        changed = false
+
+        # Two supported layouts:
+        # 1) payload keys at top level
+        # 2) @save filename result   => top-level key "result" containing payload
+        if data isa AbstractDict
+            changed |= strip_payload!(data)
+
+            result_key = find_present_key(data, "result")
+            if result_key !== nothing && data[result_key] isa AbstractDict
+                changed |= strip_payload!(data[result_key])
             end
         end
-        
-        # Strip Localiser eigensystems (keep structure but nullify data)
-        if haskey(data, "localiser_eigensystems")
-            loc_sys = data["localiser_eigensystems"]
-            if isa(loc_sys, Dict)
-                data["localiser_eigensystems"] = Dict(
-                    "full_saved" => get(loc_sys, "full_saved", false),
-                    "eigenvalues" => nothing,
-                    "eigenvectors" => nothing,
-                )
-            end
+
+        if !changed
+            return original_size, original_size, false, "File structure unrecognized (no strip-target keys found in top-level or result payload)"
         end
         
         # Ensure output directory exists
         mkpath(dirname(output_filepath))
         
         # Save stripped data
-        save(output_filepath, data)
+        if data isa AbstractDict
+            # Preserve original top-level variable naming where possible.
+            # If source file used @save filename result, keep that shape.
+            result_key = find_present_key(data, "result")
+            if result_key !== nothing
+                save(output_filepath, String(result_key), data[result_key])
+            else
+                save(output_filepath, data)
+            end
+        else
+            save(output_filepath, "result", data)
+        end
         
         # Get new file size
         stripped_size = filesize(output_filepath) / (1024^2)  # Convert to MB
