@@ -88,10 +88,56 @@ function plot_ribbon_triplet!(index_rows, meta, run_id, case_file, out_dir, gamm
     chd = getv(ribbon, "chern_contribution_density_on_ribbon")
     accum_e = getv(ribbon, "accumulation_energies")
     accum_c = getv(ribbon, "cumulative_chern")
+    max_ipr_val = maximum(ipr)
 
     p1 = plot(title="Ribbon IPR gamma=$(gamma)", xlabel="k_y", ylabel="Energy", legend=false, colorbar=true, colorbar_title="IPR")
     for b in 1:size(energies, 1)
         plot!(p1, ky, @view(energies[b, :]); line_z=@view(ipr[b, :]), lw=1.0, c=:viridis, label=false)
+    end
+
+    if haskey(ribbon, "gap_closure_data")
+        gap_data = ribbon["gap_closure_data"]
+        if haskey(gap_data, "edge_in_gap_mask")
+            mask = getv(gap_data, "edge_in_gap_mask")
+            if length(mask) == length(ky)
+                N = length(mask)
+                i = 1
+                while i <= N
+                    if !mask[i]
+                        j = i
+                        while j < N && !mask[j + 1]
+                            j += 1
+                        end
+
+                        k_left = i == 1 ? ky[1] : 0.5 * (ky[i - 1] + ky[i])
+                        k_right = j == N ? ky[end] : 0.5 * (ky[j] + ky[j + 1])
+                        vspan!(p1, [k_left, k_right]; color=:black, alpha=0.05, label=false)
+                        i = j + 1
+                    else
+                        i += 1
+                    end
+                end
+            end
+        end
+
+        if haskey(gap_data, "ky_closure_bounds")
+            closure_bounds = getv(gap_data, "ky_closure_bounds")
+            if length(closure_bounds) == 2
+                for ky_closure in closure_bounds
+                    vline!(p1, [ky_closure]; linestyle=:dot, color=:red, lw=1.5, alpha=0.7, label=false)
+                end
+            end
+        end
+
+        if haskey(gap_data, "extent_in_pi")
+            extent = getv(gap_data, "extent_in_pi")
+            ky_range = extrema(ky)
+            e_range = extrema(energies)
+            ky_pos = ky_range[1] + 0.02 * (ky_range[2] - ky_range[1])
+            e_pos = e_range[2] - 0.05 * (e_range[2] - e_range[1])
+            annotation_text = @sprintf("Edge extent (gap): %.2fpi\\nMax IPR: %.3f", extent, max_ipr_val)
+            annotate!(p1, ky_pos, e_pos, text(annotation_text, 8, :left, :top, :black))
+        end
     end
 
     chlim = maximum(abs.(chd))
@@ -124,8 +170,8 @@ function plot_band3d!(index_rows, meta, run_id, case_file, out_dir, gamma, band3
     em = getv(band3d, "e_minus")
     ep = getv(band3d, "e_plus")
 
-    plt = surface(kx, ky, em'; xlabel="k_x", ylabel="k_y", zlabel="E", color=:viridis, alpha=0.8, legend=false, title="3D Bandstructure gamma=$(gamma)")
-    surface!(plt, kx, ky, ep'; color=:plasma, alpha=0.8, legend=false)
+    plt = surface(kx, ky, em'; xlabel="k_x", ylabel="k_y", zlabel="E", color=:viridis, alpha=1.0, legend=false, title="3D Bandstructure gamma=$(gamma)")
+    surface!(plt, kx, ky, ep'; color=:plasma, alpha=0.5, legend=false)
 
     fp = joinpath(out_dir, "band3d_gamma$(gamma).png")
     savefig(plt, fp)

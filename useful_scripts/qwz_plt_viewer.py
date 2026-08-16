@@ -36,8 +36,49 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer
-from PIL import Image
-import io
+
+
+PREFERRED_PLOT_ORDER = [
+    # Row 1
+    "ribbon_ipr",
+    "ribbon_dcdE",
+    "ribbon_chern_acc",
+    # Row 2
+    "band3d",
+    "ldos_target",
+    "dos",
+    # Row 3
+    "specloc_spectrum_vs_E",
+    "specloc_signature_vs_E",
+    "specloc_loggap_vs_E",
+    # Row 4 (gap heatmaps)
+    "specloc_gap_gamma_kappa",
+    "specloc_gap_gamma_W",
+    "specloc_gap_W_kappa",
+    # Row 5 (signature heatmaps)
+    "specloc_sig_gamma_kappa",
+    "specloc_sig_gamma_W",
+    "specloc_sig_W_kappa",
+]
+
+PLOT_TITLES = {
+    "ribbon_ipr": "Ribbon Spectrum (IPR)",
+    "ribbon_dcdE": "Ribbon Spectrum (Chern Density dC/dE)",
+    "ribbon_chern_acc": "Accumulated Chern vs Energy",
+    "band3d": "3D Bandstructure",
+    "ldos_target": "LDOS at Target Energy",
+    "ldos_lowest": "LDOS of Lowest-|E| States",
+    "dos": "DOS vs Energy",
+    "specloc_spectrum_vs_E": "Speclocaliser Spectrum vs Energy",
+    "specloc_signature_vs_E": "Speclocaliser Signature vs Energy",
+    "specloc_loggap_vs_E": "Speclocaliser Gap vs Energy",
+    "specloc_gap_gamma_kappa": "Speclocaliser Gap: gamma vs kappa",
+    "specloc_gap_gamma_W": "Speclocaliser Gap: gamma vs W",
+    "specloc_gap_W_kappa": "Speclocaliser Gap: W vs kappa",
+    "specloc_sig_gamma_kappa": "Speclocaliser Signature: gamma vs kappa",
+    "specloc_sig_gamma_W": "Speclocaliser Signature: gamma vs W",
+    "specloc_sig_W_kappa": "Speclocaliser Signature: W vs kappa",
+}
 
 
 class PlotViewer(QMainWindow):
@@ -53,12 +94,20 @@ class PlotViewer(QMainWindow):
         self.labels = {}
         self.plot_cards = {}
         self.available_plot_types = []
+        self.display_plot_types = []
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_display)
         self.update_timer.setSingleShot(True)
 
         self.load_source()
         self.init_ui()
+
+    def _ordered_plot_types(self, available_types):
+        preferred_present = [p for p in PREFERRED_PLOT_ORDER if p in available_types]
+        preferred_missing = [p for p in PREFERRED_PLOT_ORDER if p not in available_types]
+        extras = sorted([p for p in available_types if p not in PREFERRED_PLOT_ORDER])
+        # Keep preferred placeholders visible even if currently unavailable.
+        return preferred_present + preferred_missing + extras
 
     @staticmethod
     def _try_float(x):
@@ -128,6 +177,7 @@ class PlotViewer(QMainWindow):
                 self.param_ranges[k] = vals
 
         self.available_plot_types = sorted({r["plot_type"] for r in self.records})
+        self.display_plot_types = self._ordered_plot_types(self.available_plot_types)
         print(f"Loaded index: {index_file}")
         print(f"Records: {len(self.records)}")
         print(f"Plot types ({len(self.available_plot_types)}): {self.available_plot_types}")
@@ -163,6 +213,7 @@ class PlotViewer(QMainWindow):
 
         self.plot_files = plots_dict
         self.available_plot_types = ["ipr", "berry_curv", "chern_accumulation"]
+        self.display_plot_types = self.available_plot_types[:]
         print(f"Legacy mode: {len(plots_dict)} parameter combinations in {plots_dir}")
     
     def init_ui(self):
@@ -176,9 +227,9 @@ class PlotViewer(QMainWindow):
         # Controls column
         control_panel = QWidget()
         control_layout = QVBoxLayout(control_panel)
-        control_layout.setSpacing(10)
+        control_layout.setSpacing(6)
         control_layout.setAlignment(Qt.AlignTop)
-        control_panel.setMinimumWidth(360)
+        control_panel.setMinimumWidth(290)
 
         for param_name in sorted(self.param_ranges.keys()):
             if not self.param_ranges[param_name]:
@@ -208,16 +259,18 @@ class PlotViewer(QMainWindow):
         control_layout.addStretch()
         control_scroll = QScrollArea()
         control_scroll.setWidgetResizable(True)
-        control_scroll.setMinimumWidth(340)
+        control_scroll.setMinimumWidth(280)
+        control_scroll.setMaximumWidth(320)
         control_scroll.setWidget(control_panel)
 
         # Plot grid (scrollable)
         plots_container = QWidget()
         self.image_layout = QGridLayout(plots_container)
-        self.image_layout.setSpacing(12)
+        self.image_layout.setSpacing(6)
+        self.image_layout.setContentsMargins(4, 4, 4, 4)
 
-        for i, plot_type in enumerate(self.available_plot_types):
-            title = QLabel(plot_type)
+        for i, plot_type in enumerate(self.display_plot_types):
+            title = QLabel(PLOT_TITLES.get(plot_type, plot_type))
             title.setAlignment(Qt.AlignCenter)
             title.setStyleSheet("font-weight: bold;")
 
@@ -229,10 +282,12 @@ class PlotViewer(QMainWindow):
 
             card = QWidget()
             card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(3, 3, 3, 3)
+            card_layout.setSpacing(4)
             card_layout.addWidget(title)
             card_layout.addWidget(image)
 
-            self.plot_cards[plot_type] = {"title": title, "image": image}
+            self.plot_cards[plot_type] = {"title": title, "image": image, "pixmap": None}
             r = i // 3
             c = i % 3
             self.image_layout.addWidget(card, r, c)
@@ -243,6 +298,8 @@ class PlotViewer(QMainWindow):
 
         main_layout.addWidget(control_scroll, 0)
         main_layout.addWidget(plots_scroll, 1)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(6, 6, 6, 6)
 
         central_widget.setLayout(main_layout)
         self.update_display()
@@ -309,9 +366,11 @@ class PlotViewer(QMainWindow):
             for plot_type, card in self.plot_cards.items():
                 rec = self._best_record_for_type(plot_type, target_params)
                 if rec is None:
+                    card["pixmap"] = None
                     card["image"].setText("No matching record")
+                    card["image"].setPixmap(QPixmap())
                     continue
-                card["title"].setText(plot_type)
+                card["title"].setText(PLOT_TITLES.get(plot_type, plot_type))
                 self.display_image(card["image"], rec.get("plot_path", ""))
         else:
             legacy_map = self._legacy_best_plot_map(target_params)
@@ -320,28 +379,61 @@ class PlotViewer(QMainWindow):
                 if path:
                     self.display_image(card["image"], path)
                 else:
+                    card["pixmap"] = None
                     card["image"].setText("No matching image")
+                    card["image"].setPixmap(QPixmap())
+
+    def _rescale_card_image(self, plot_type):
+        card = self.plot_cards.get(plot_type)
+        if not card:
+            return
+        pixmap = card.get("pixmap")
+        label = card["image"]
+        if pixmap is None or pixmap.isNull():
+            return
+
+        target_rect = label.contentsRect()
+        if target_rect.width() < 20 or target_rect.height() < 20:
+            return
+
+        scaled = pixmap.scaled(
+            target_rect.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        label.setPixmap(scaled)
 
     def display_image(self, label, image_path):
         try:
             if not image_path:
+                for plot_type, card in self.plot_cards.items():
+                    if card["image"] is label:
+                        card["pixmap"] = None
                 label.setText("No image path")
+                label.setPixmap(QPixmap())
                 return
-            img = Image.open(image_path)
-            max_width = 1000
-            max_height = 760
-            img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
 
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format="PNG")
-            img_byte_arr.seek(0)
+            pixmap = QPixmap(image_path)
+            if pixmap.isNull():
+                label.setText(f"Error loading image:\n{image_path}")
+                label.setPixmap(QPixmap())
+                return
 
-            pixmap = QPixmap()
-            pixmap.loadFromData(img_byte_arr.getvalue(), "PNG")
-            label.setPixmap(pixmap)
+            for plot_type, card in self.plot_cards.items():
+                if card["image"] is label:
+                    card["pixmap"] = pixmap
+                    self._rescale_card_image(plot_type)
+                    break
+
             label.setText("")
         except Exception as e:
             label.setText(f"Error loading image:\n{str(e)}")
+            label.setPixmap(QPixmap())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        for plot_type in self.plot_cards.keys():
+            self._rescale_card_image(plot_type)
 
     def reset_params(self):
         for param_name in self.sliders:
