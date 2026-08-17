@@ -522,6 +522,7 @@ function run_case(cfg::SolverCaseConfig)
 
     specloc_gap = zeros(Float64, ng, nW, nk, nE)
     specloc_signature = zeros(Int, ng, nW, nk, nE)
+    specloc_index = zeros(Float64, ng, nW, nk, nE)
 
     spectrum_vs_gamma = Vector{Vector{Float64}}(undef, ng)
     spectrum_vs_W = Vector{Vector{Float64}}(undef, nW)
@@ -592,6 +593,7 @@ function run_case(cfg::SolverCaseConfig)
                 end
 
                 specloc_signature[gi, wi, ki, ei] = sig
+                specloc_index[gi, wi, ki, ei] = 0.5 * sig
                 specloc_gap[gi, wi, ki, ei] = gap
 
                 # Reuse spectra from the main scan for reference cuts to avoid
@@ -609,12 +611,25 @@ function run_case(cfg::SolverCaseConfig)
         end
     end
 
-    # OBC eigensystem at reference disorder strength for DOS / LDOS
+    # OBC eigensystem at reference disorder strength for DOS / LDOS.
+    # Also retain gamma-resolved slices at fixed W index so viewer gamma changes are meaningful.
     F_obc = eig_cache[pair_index(ig0, iW0)]
     obc_eigs = real(F_obc.values)
     dos_vals = compute_dos(obc_eigs, Es; eta=cfg.dos_eta)
     ldos_target = compute_ldos(F_obc, cfg.Lx_obc, cfg.Ly_obc, cfg.ldos_target_E; eta=cfg.ldos_eta)
     ldos_lowest = lowest_energy_ldos(F_obc, cfg.Lx_obc, cfg.Ly_obc; nlowest=cfg.lowest_energy_count)
+
+    dos_by_gamma = Dict{Float64, Vector{Float64}}()
+    ldos_target_by_gamma = Dict{Float64, Matrix{Float64}}()
+    ldos_lowest_by_gamma = Dict{Float64, Matrix{Float64}}()
+    for gi in 1:ng
+        gamma = gammas[gi]
+        Fg = eig_cache[pair_index(gi, iW0)]
+        eigs_g = real(Fg.values)
+        dos_by_gamma[gamma] = compute_dos(eigs_g, Es; eta=cfg.dos_eta)
+        ldos_target_by_gamma[gamma] = compute_ldos(Fg, cfg.Lx_obc, cfg.Ly_obc, cfg.ldos_target_E; eta=cfg.ldos_eta)
+        ldos_lowest_by_gamma[gamma] = lowest_energy_ldos(Fg, cfg.Lx_obc, cfg.Ly_obc; nlowest=cfg.lowest_energy_count)
+    end
 
     # Ribbon and 3D band at each gamma, but only for W=0 slice semantics.
     ribbon_by_gamma = Dict{Float64, Any}()
@@ -682,6 +697,7 @@ function run_case(cfg::SolverCaseConfig)
         "specloc" => Dict(
             "gap" => specloc_gap,
             "signature" => specloc_signature,
+            "index" => specloc_index,
             "spectrum_vs_gamma" => spectrum_vs_gamma,
             "spectrum_vs_W" => spectrum_vs_W,
             "spectrum_vs_kappa" => spectrum_vs_kappa,
@@ -695,6 +711,10 @@ function run_case(cfg::SolverCaseConfig)
             "ldos_target" => ldos_target,
             "ldos_lowest" => ldos_lowest,
             "ldos_target_E" => cfg.ldos_target_E,
+            "dos_by_gamma" => dos_by_gamma,
+            "ldos_target_by_gamma" => ldos_target_by_gamma,
+            "ldos_lowest_by_gamma" => ldos_lowest_by_gamma,
+            "obc_ref_indices" => Dict("gamma" => ig0, "W" => iW0),
         ),
         "hamiltonian_eigensystems" => hamiltonian_saved,
         "localiser_eigensystems" => localiser_saved,
