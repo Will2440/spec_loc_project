@@ -240,13 +240,14 @@ function build_lazy_packet(input_root::String, output_root::String; run_id::Stri
         has_dos_by_gamma = haskey(obc, "dos_by_gamma")
         has_ldos_target_by_gamma = haskey(obc, "ldos_target_by_gamma")
         has_ldos_lowest_by_gamma = haskey(obc, "ldos_lowest_by_gamma")
+        default_gamma = length(gammas) == 1 ? gammas[1] : NaN
 
         if has_dos_by_gamma
             for gamma in gammas
                 next_id = add_record!(records, next_id, "case", "", cf, "dos", meta; gamma=gamma)
             end
         else
-            next_id = add_record!(records, next_id, "case", "", cf, "dos", meta)
+            next_id = add_record!(records, next_id, "case", "", cf, "dos", meta; gamma=default_gamma)
         end
 
         if has_ldos_target_by_gamma
@@ -254,7 +255,7 @@ function build_lazy_packet(input_root::String, output_root::String; run_id::Stri
                 next_id = add_record!(records, next_id, "case", "", cf, "ldos_target", meta; gamma=gamma)
             end
         else
-            next_id = add_record!(records, next_id, "case", "", cf, "ldos_target", meta)
+            next_id = add_record!(records, next_id, "case", "", cf, "ldos_target", meta; gamma=default_gamma)
         end
 
         if has_ldos_lowest_by_gamma
@@ -262,16 +263,25 @@ function build_lazy_packet(input_root::String, output_root::String; run_id::Stri
                 next_id = add_record!(records, next_id, "case", "", cf, "ldos_lowest", meta; gamma=gamma)
             end
         else
-            next_id = add_record!(records, next_id, "case", "", cf, "ldos_lowest", meta)
+            next_id = add_record!(records, next_id, "case", "", cf, "ldos_lowest", meta; gamma=default_gamma)
         end
     end
 
+    # All specloc plot types to emit as explicit records
     specloc_plot_types = [
         "specloc_signature_vs_E",
         "specloc_loggap_vs_E",
         "specloc_gap_gamma_E",
         "specloc_sig_gamma_E",
+        "specloc_gap_gamma_W",
+        "specloc_sig_gamma_W",
+        "specloc_gap_gamma_kappa",
+        "specloc_sig_gamma_kappa",
+        "specloc_gap_W_kappa",
+        "specloc_sig_W_kappa",
         "specloc_spectrum_vs_gamma",
+        "specloc_spectrum_vs_W",
+        "specloc_spectrum_vs_kappa",
     ]
 
     groups = collect(values(groups_by_key))

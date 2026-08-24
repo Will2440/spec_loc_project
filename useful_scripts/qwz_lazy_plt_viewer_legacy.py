@@ -9,16 +9,20 @@ Workflow:
    python3 useful_scripts/qwz_lazy_plt_viewer.py <.../lazy_packet or .../lazy_packet_records.tsv>
 
 The viewer requests only visible plots and caches rendered images locally.
+Background worker continuously generates plots, spreading from default parameters.
 """
 
 import csv
+import json
 import math
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
+from queue import PriorityQueue
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPixmap
@@ -45,12 +49,12 @@ PREFERRED_PLOT_ORDER = [
     "ribbon_ipr_auto",
     "ribbon_dcdE_auto",
     "ribbon_chern_acc_auto",
-    "band3d",
-    "ldos_target",
-    "dos",
     "specloc_spectrum_vs_gamma",
     "specloc_signature_vs_E",
     "specloc_loggap_vs_E",
+    "band3d",
+    "ldos_target",
+    "dos",
     "specloc_gap_gamma_E",
     "specloc_sig_gamma_E",
     "specloc_gap_gamma_kappa",
@@ -110,6 +114,157 @@ VIRTUAL_SPEClOC_PLOT_TYPES = {
 }
 
 
+class PlotGenerationWorker(threading.Thread):
+    """Background worker thread that systematically generates and caches plots."""
+
+    def __init__(self, viewer):
+        super().__init__(daemon=True)
+        self.viewer = viewer
+        self.request_queue = PriorityQueue()  # (priority, record_id, plot_type, target_params)
+        self.running = True
+        self.generated_index = self._load_generated_index()
+        self.lock = threading.Lock()
+        self.exploration_depth = 0
+        self.exploration_visited = set()
+
+    def _load_generated_index(self):
+        """Load index of already-generated plots from persistent storage."""
+        index_file = self.viewer.cache_dir / "background_generated_index.json"
+        if index_file.exists():
+            try:
+                with open(index_file) as f:
+                    data = json.load(f)
+                    return set(data.get("generated", []))
+            except Exception:
+                return set()
+        return set()
+
+    def _save_generated_index(self):
+        """Persist the index of generated plots."""
+        index_file = self.viewer.cache_dir / "background_generated_index.json"
+        try:
+            with open(index_file, 'w') as f:
+                json.dump({"generated": sorted(list(self.generated_index))}, f)
+        except Exception:
+            pass
+
+    def request_plot(self, record_id, plot_type, priority=0):
+        """Queue a plot generation request. priority=0 is user (high), higher=background (low)."""
+        self.request_queue.put((priority, record_id, plot_type))
+
+    def run(self):
+        """Main worker loop: process user requests first, then explore background."""
+        while self.running:
+            try:
+                # Check for user-prioritized requests (blocking, 0.1s timeout)
+                try:
+                    priority, record_id, plot_type = self.request_queue.get(timeout=0.1)
+                    key = f"{record_id}:{plot_type}"
+
+                    if key not in self.generated_index:
+                        pairs = [(record_id, plot_type)]
+                        self.viewer._render_pairs(pairs)
+                        with self.lock:
+                            self.generated_index.add(key)
+                            self._save_generated_index()
+                    continue
+                except:
+                    pass
+
+                # No user requests; do background exploration
+                self._explore_background()
+
+            except Exception as e:
+                if not self.running:
+                    break
+                time.sleep(0.5)
+
+    def _explore_background(self):
+        """Systematically explore parameter space from default parameters."""
+        defaults = {
+            "A": 1.0,
+            "B": 1.0,
+            "m": -1.0,
+            "E": 0.0,
+            "gamma": 0.0,
+        }
+
+        # Get current exploration state
+        state_key = ("explore", self.exploration_depth, str(sorted(self.exploration_visited)))
+
+        if state_key not in self.exploration_visited:
+            # Generate plots at current neighbors
+            candidates = []
+
+            if self.exploration_depth == 0:
+                # Start at defaults
+                target = dict(defaults)
+                for plot_type in self.viewer.display_plot_types:
+                    rec = self.viewer._best_record_for_type(plot_type, target)
+                    if rec is not None:
+                        candidates.append((rec["record_id"], plot_type))
+                self.exploration_visited.add(state_key)
+            else:
+                # Explore neighbors at current depth
+                base_idx = {}
+                for pname in sorted(self.viewer.param_ranges.keys()):
+                    vals = self.viewer.param_ranges.get(pname, [])
+                    if not vals:
+                        continue
+                    target_val = defaults.get(pname, vals[0])
+                    idx = min(range(len(vals)), key=lambda i: abs(float(vals[i]) - target_val))
+                    base_idx[pname] = idx
+
+                # Generate neighbor targets
+                neighbor_targets = []
+                for pname in sorted(base_idx.keys()):
+                    max_i = len(self.viewer.param_ranges.get(pname, [])) - 1
+                    if max_i < 1:
+                        continue
+                    for delta in range(1, self.exploration_depth + 1):
+                        for sign in (-1, 1):
+                            ni = base_idx[pname] + sign * delta
+                            if 0 <= ni <= max_i:
+                                idx_copy = dict(base_idx)
+                                idx_copy[pname] = ni
+                                neighbor_targets.append(self.viewer._target_from_indices(idx_copy))
+
+                # Sample and generate
+                for target in neighbor_targets[:100]:  # Batch of 100 per depth level
+                    for plot_type in self.viewer.display_plot_types:
+                        rec = self.viewer._best_record_for_type(plot_type, target)
+                        if rec is not None:
+                            candidates.append((rec["record_id"], plot_type))
+
+                self.exploration_visited.add(state_key)
+
+            # Render candidates, skip already-generated
+            to_render = []
+            for record_id, plot_type in candidates:
+                key = f"{record_id}:{plot_type}"
+                if key not in self.generated_index:
+                    to_render.append((record_id, plot_type))
+
+            if to_render:
+                self.viewer._render_pairs(to_render[:50])  # Batch render up to 50
+                with self.lock:
+                    for record_id, plot_type in to_render[:50]:
+                        self.generated_index.add(f"{record_id}:{plot_type}")
+                    self._save_generated_index()
+
+            # Move to next depth after current batch
+            if len(to_render) == 0 or len(candidates) < 20:
+                self.exploration_depth += 1
+                if self.exploration_depth > 5:
+                    self.exploration_depth = 0
+                    time.sleep(2)  # Pause before restarting exploration
+
+    def stop(self):
+        """Gracefully stop the worker."""
+        self.running = False
+        self._save_generated_index()
+
+
 class LazyPlotViewer(QMainWindow):
     def __init__(self, source_path):
         super().__init__()
@@ -130,6 +285,7 @@ class LazyPlotViewer(QMainWindow):
         self.labels = {}
         self.plot_cards = {}
         self.rendered_path_cache = {}
+        self._manifest_cache = {}
         self.selection_cache = {}
         self.perturbation_values = []
         self.selected_perturbation = None
@@ -163,6 +319,11 @@ class LazyPlotViewer(QMainWindow):
         default_prefetch = "0" if len(self.records) > 100000 else "1"
         self.prefetch_enabled = os.environ.get("SPECLOC_LAZY_PREFETCH", default_prefetch).lower() not in ("0", "false", "no")
         self._init_ui()
+
+        # Start background plot generation worker
+        self.plot_worker = PlotGenerationWorker(self)
+        self.plot_worker.start()
+        print("Background plot worker started")
 
     def _resolve_packet_paths(self, source):
         if source.is_file() and source.name == "lazy_packet_records.tsv":
@@ -379,16 +540,98 @@ class LazyPlotViewer(QMainWindow):
         except OSError:
             return False
 
-    def _render_variant(self, plot_type):
+    def _render_variant(self, plot_type, target_params=None):
+        if target_params is None:
+            target_params = self.current_params
+
+        gamma = target_params.get("gamma", float("nan"))
+        gamma_tag = "nan" if math.isnan(float(gamma)) else f"{float(gamma):.12g}"
+
         if plot_type == "specloc_spectrum_vs_gamma":
             return f"{self._spectrum_ylim_version}:{self.spectrum_ymin}:{self.spectrum_ymax}"
         if plot_type in ("specloc_signature_vs_E", "specloc_loggap_vs_E"):
             return f"Eref:{self._current_target_E}"
+        if plot_type in ("dos", "ldos_target"):
+            return f"gamma:{gamma_tag}"
         return "base"
 
-    def _render_pairs(self, pairs):
+    def _read_manifest_rows(self, image_path):
+        p = Path(image_path)
+        try:
+            bundle_dir = p.parents[1]
+        except IndexError:
+            return []
+        manifest = bundle_dir / "manifest.tsv"
+        if not manifest.is_file():
+            return []
+
+        try:
+            mtime = manifest.stat().st_mtime
+        except OSError:
+            return []
+
+        key = str(manifest)
+        cached = self._manifest_cache.get(key)
+        if cached is not None and cached.get("mtime") == mtime:
+            return cached.get("rows", [])
+
+        rows = []
+        try:
+            with open(manifest, "r", newline="") as fh:
+                reader = csv.DictReader(fh, delimiter="\t")
+                for row in reader:
+                    rows.append({
+                        "plot_type": str(row.get("plot_type", "")),
+                        "gamma": self._try_float(row.get("gamma", "")),
+                        "W": self._try_float(row.get("W", "")),
+                        "kappa": self._try_float(row.get("kappa", "")),
+                        "E": self._try_float(row.get("E", "")),
+                        "plot_path": str(row.get("plot_path", "")),
+                    })
+        except OSError:
+            return []
+
+        self._manifest_cache[key] = {"mtime": mtime, "rows": rows}
+        return rows
+
+    def _distance_manifest_row(self, row, target_params):
+        dist = 0.0
+        used = 0
+        for k in ("gamma", "W", "kappa", "E"):
+            rv = row.get(k, float("nan"))
+            tv = target_params.get(k, float("nan"))
+            if not math.isnan(float(rv)) and not math.isnan(float(tv)):
+                dist += (float(rv) - float(tv)) ** 2
+                used += 1
+        return dist if used > 0 else float("inf")
+
+    def _gamma_filtered_path(self, image_path, plot_type, target_params):
+        if plot_type not in ("dos", "ldos_target"):
+            return image_path
+
+        rows = self._read_manifest_rows(image_path)
+        if not rows:
+            return image_path
+
+        candidates = [r for r in rows if r.get("plot_type") == plot_type and self._path_exists_and_nonempty(r.get("plot_path", ""))]
+        if not candidates:
+            return image_path
+
+        req_gamma = target_params.get("gamma", float("nan"))
+        if not math.isnan(float(req_gamma)):
+            finite_gamma = [r for r in candidates if not math.isnan(float(r.get("gamma", float("nan"))))]
+            if finite_gamma:
+                candidates = finite_gamma
+
+        best = min(candidates, key=lambda r: self._distance_manifest_row(r, target_params))
+        return best.get("plot_path", image_path)
+
+    def _render_pairs(self, pairs, target_params=None):
         if not pairs:
             return {}
+
+        if target_params is None:
+            target_params = dict(self.current_params)
 
         # Deduplicate while preserving order.
         seen = set()
@@ -405,10 +648,10 @@ class LazyPlotViewer(QMainWindow):
         missing_has_spectrum = False
         for pair in pairs:
             rid, ptype = pair
-            key = (rid, ptype, self._render_variant(ptype))
+            key = (rid, ptype, self._render_variant(ptype, target_params))
             cached_path = self.rendered_path_cache.get(key, "")
             if self._path_exists_and_nonempty(cached_path):
-                out[pair] = cached_path
+                out[pair] = self._gamma_filtered_path(cached_path, ptype, target_params)
             else:
                 missing.append(pair)
                 if ptype == "specloc_spectrum_vs_gamma":
@@ -458,9 +701,9 @@ class LazyPlotViewer(QMainWindow):
                     continue
                 rid, ptype, path = parts
                 pair = (rid, ptype)
-                key = (rid, ptype, self._render_variant(ptype))
+                key = (rid, ptype, self._render_variant(ptype, target_params))
                 self.rendered_path_cache[key] = path
-                out[pair] = path
+                out[pair] = self._gamma_filtered_path(path, ptype, target_params)
 
             self._enforce_cache_limit()
             # Drop stale cache entries after eviction.
@@ -715,10 +958,6 @@ class LazyPlotViewer(QMainWindow):
 
         self.plot_cards = {}
         for i, plot_type in enumerate(self.display_plot_types):
-            title = QLabel(PLOT_TITLES.get(plot_type, plot_type))
-            title.setAlignment(Qt.AlignCenter)
-            title.setStyleSheet("font-weight: bold;")
-
             meta = QLabel("Record: pending")
             meta.setAlignment(Qt.AlignCenter)
             meta.setWordWrap(True)
@@ -734,11 +973,10 @@ class LazyPlotViewer(QMainWindow):
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(3, 3, 3, 3)
             card_layout.setSpacing(4)
-            card_layout.addWidget(title)
             card_layout.addWidget(meta)
             card_layout.addWidget(image)
 
-            self.plot_cards[plot_type] = {"title": title, "meta": meta, "image": image, "pixmap": None}
+            self.plot_cards[plot_type] = {"meta": meta, "image": image, "pixmap": None}
             r = i // 3
             c = i % 3
             self.image_layout.addWidget(card, r, c)
@@ -848,7 +1086,7 @@ class LazyPlotViewer(QMainWindow):
             selected.append((rec["record_id"], plot_type))
             selected_by_type[plot_type] = rec
 
-        rendered_map = self._render_pairs(selected)
+        rendered_map = self._render_pairs(selected, target_params=target_params)
 
         for plot_type, card in self.plot_cards.items():
             rec = selected_by_type.get(plot_type)
@@ -858,7 +1096,6 @@ class LazyPlotViewer(QMainWindow):
                 card["image"].setPixmap(QPixmap())
                 continue
 
-            card["title"].setText(PLOT_TITLES.get(plot_type, plot_type))
             card["meta"].setText(self._format_record_metadata(rec, plot_type))
             image_path = rendered_map.get((rec["record_id"], plot_type), "")
             self._display_image(card["image"], image_path, plot_type, target_params)

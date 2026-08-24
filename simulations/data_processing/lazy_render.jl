@@ -261,7 +261,8 @@ function main()
 
     rec_by_id = Dict(r["record_id"] => r for r in records)
     groups_by_id = merge_groups_by_physics(groups)
-    fixed_dcdE_clims = load_packet_dcdE_clims(records_tsv)
+    # Keep fixed dC/dE scaling local to each rendered ribbon plot.
+    fixed_dcdE_clims = nothing
     force_rebuild = lowercase(get(ENV, "SPECLOC_LAZY_FORCE_REBUILD", "false")) in ("1", "true", "yes", "on")
 
     suppress_gr_warnings = lowercase(get(ENV, "SPECLOC_SUPPRESS_GR_WARNINGS", "true")) in ("1", "true", "yes", "on")

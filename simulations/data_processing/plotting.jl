@@ -708,10 +708,10 @@ function plot_specloc_cuts!(index_rows, meta, run_id, case_file, out_dir, axes, 
     W_heat = Ws[iW_heat]
     k_heat = kappas[ik_heat]
 
-    h_gap_gE = permutedims(log10.(gap[:, iW_heat, ik_heat, :] .+ 1e-14), (2, 1))
-    h_sig_gE = permutedims(sig[:, iW_heat, ik_heat, :], (2, 1))
-    p_gE_gap = heatmap(gammas, Es, h_gap_gE; xlabel="gamma", ylabel="E", title="log(gap): gamma vs E (W=$(W_heat), k=$(k_heat))", colorbar_title="log10(gap)")
-    p_gE_sig = heatmap(gammas, Es, h_sig_gE; xlabel="gamma", ylabel="E", title="signature: gamma vs E (W=$(W_heat), k=$(k_heat))", colorbar_title="signature")
+    h_gap_gE = log10.(gap[:, iW_heat, ik_heat, :] .+ 1e-14)
+    h_sig_gE = sig[:, iW_heat, ik_heat, :]
+    p_gE_gap = heatmap(Es, gammas, h_gap_gE'; xlabel="E", ylabel="gamma", title="log(gap): E vs gamma (W=$(W_heat), k=$(k_heat))", colorbar_title="log10(gap)")
+    p_gE_sig = heatmap(Es, gammas, h_sig_gE'; xlabel="E", ylabel="gamma", title="signature: E vs gamma (W=$(W_heat), k=$(k_heat))", colorbar_title="signature")
 
     fp_gE_gap = joinpath(out_dir, "specloc_gap_gamma_E.png")
     fp_gE_sig = joinpath(out_dir, "specloc_sig_gamma_E.png")
