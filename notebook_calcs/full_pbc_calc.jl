@@ -16,6 +16,11 @@ sigma_y = [0 -im; im 0]
 sigma_z = [1 0; 0 -1]
 identity = [1 0; 0 1]
 
+pi_ticks = (
+                [-π, -3π/4, -π/2, -π/4, 0, π/4, π/2, 3π/4, π],
+                [L"-\pi", L"-3\pi/4", L"-\pi/2", L"-\pi/4", L"0", L"\pi/4", L"\pi/2", L"3\pi/4", L"\pi"]
+            )
+
 # 1. Unified Block Generator
 function real_space_perturbed_qwz_blocks(; 
     A::Real=1.0, 
@@ -244,8 +249,15 @@ function compute_bulk_band_berry_data(
     )
 end
 
-function edge_state_prediction(
-
+function edge_state_prediction(;
+    Nkx::Int=101,
+    Nky::Int=101,
+    A::Real=1.0,
+    B::Real=1.0,
+    m::Real=-1.0,
+    gamma::Real=0.0,
+    perturbation_type::Symbol=:none,
+    kwargs...
 )
     """
     predicts 
@@ -253,8 +265,57 @@ function edge_state_prediction(
         given by E = ± sqrt(A^2 * (sin(kx)^2 + sin(ky)^2) + (m + 2B - B * cos(kx) - B * cos(ky))^2)
     (2) the extent of the edge states in k
         given by cos(kx) + cos(ky) = (m + 2B) / B
+    (3) the bandgap in (kx, ky)
     """
 
+    kx_vals = collect(range(-π, π; length=Nkx + 1))[1:end-1]
+    ky_vals = collect(range(-π, π; length=Nky + 1))[1:end-1]
+
+    # 1. Bulk energy spectrum surface
+    energies = zeros(Float64, 2, Nkx, Nky)
+    dz_locus = zeros(Float64, Nkx, Nky)
+    edge_crossings = Vector{NamedTuple{(:kx, :ky, :E), Tuple{Float64, Float64, Float64}}}()
+    bulk_gap = zeros(Float64, Nkx, Nky)
+
+    for (ix, kx) in enumerate(kx_vals), (iy, ky) in enumerate(ky_vals)
+        # Scalar perturbation term
+        scalar_term = 0.0
+        if perturbation_type == :symmetric
+            scalar_term = gamma * (cos(kx) + cos(ky))
+        elseif perturbation_type == :tilt
+            scalar_term = gamma * sin(kx)
+        end
+
+        dx = A * sin(kx)
+        dy = A * sin(ky)
+        dz = m + 2B - B * cos(kx) - B * cos(ky)
+
+        # Bulk dispersion: E_± = scalar ± sqrt(dx^2 + dy^2 + dz^2)
+        gap_magnitude = sqrt(dx^2 + dy^2 + dz^2)
+        energies[1, ix, iy] = scalar_term - gap_magnitude # Lower band
+        energies[2, ix, iy] = scalar_term + gap_magnitude # Upper band
+
+        # Extent surface criterion dz(kx, ky) = 0 => cos(kx) + cos(ky) = (m + 2B) / B
+        dz_locus[ix, iy] = dz
+
+        # High-symmetry crossing detection (where gap closes, dx = dy = dz = 0)
+        if isapprox(dx, 0.0; atol=1e-5) && isapprox(dy, 0.0; atol=1e-5) && isapprox(dz, 0.0; atol=1e-5)
+            push!(edge_crossings, (kx=kx, ky=ky, E=scalar_term))
+        end
+
+        # Bulk bandgap calculation
+        bulk_gap[ix, iy] = energies[2, ix, iy] - energies[1, ix, iy]
+    end
+
+    return (
+        kx_vals = kx_vals,
+        ky_vals = ky_vals,
+        energies = energies,
+        bulk_gap = bulk_gap,
+        dz_locus = dz_locus,
+        edge_crossings = edge_crossings,
+        is_topological = (-4B < m < 0)
+    )
 end
 
 ############################################################################
@@ -357,193 +418,6 @@ function plt_k_resolved_F_xy_heatmaps(
 
     return plot(plots[1], plots[2], layout=(1, 2), size=(900, 400))
 end
-
-# function plt_berry_curvature_heatmaps(
-#     kx_vals::Vector{Float64},
-#     ky_vals::Vector{Float64},
-#     berry_curvature::Array{Float64, 3},
-#     plaquette_energies::Array{Float64, 3};
-#     title::LaTeXString=L"",
-#     xlabel::LaTeXString=L"k_x",
-#     ylabel::LaTeXString=L"k_y",
-#     colour=:RdBu,
-#     shift_to_centers::Bool=false,
-#     share_colour_scale::Bool=true,
-#     add_contours::Bool=true,
-# )
-#     """
-#     Plots the local k-resolved contribution to the Chern number (F_{xy} / 2π)
-#     for both bands side-by-side, with optional contours showing energy-cumulative Chern values.
-#     """
-#     chern_density = berry_curvature ./ (2π)
-
-#     dkx = kx_vals[2] - kx_vals[1]
-#     dky = ky_vals[2] - ky_vals[1]
-#     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
-#     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
-
-#     global_max = share_colour_scale ? maximum(abs, chern_density[1:2, :, :]) : 0.0
-
-#     plots = map(1:2) do band_index
-#         density_b = chern_density[band_index, :, :]
-#         energies_b = plaquette_energies[band_index, :, :]
-
-#         # 1. Compute Cumulative Chern Field as a function of local energy E(kx, ky)
-#         flat_E = vec(energies_b)
-#         flat_F = vec(density_b)
-#         order = sortperm(flat_E)
-        
-#         sorted_E = flat_E[order]
-#         cum_chern_sorted = cumsum(flat_F[order])
-        
-#         # Map sorted cumulative values back to original 2D (kx, ky) grid layout
-#         cum_chern_2d = zeros(Float64, size(energies_b))
-#         cum_chern_2d[order] .= cum_chern_sorted
-
-#         # 2. Setup Subplot Properties
-#         c_limits = share_colour_scale ? 
-#             (-global_max, global_max) : 
-#             let max_val = maximum(abs, density_b)
-#                 (-max_val, max_val)
-#             end
-
-#         total_chern = round(sum(density_b), digits=4)
-#         sub_title = isempty(title) ? 
-#             L"F_{xy} / 2\pi \text{ (Band %$(band_index), C = %$(total_chern))}" : 
-#             L"%$(title) (Band %$(band_index), C = %$(total_chern))"
-
-#         # 3. Base Heatmap Plot
-#         p = heatmap(
-#             x_coords,
-#             y_coords,
-#             density_b',
-#             xlabel=xlabel,
-#             ylabel=ylabel,
-#             title=sub_title,
-#             color=colour,
-#             clims=c_limits,
-#             aspect_ratio=:equal
-#         )
-
-#         # 4. Overlay Energy-Accumulated Chern Contours
-#         if add_contours
-#             contour!(
-#                 p,
-#                 x_coords,
-#                 y_coords,
-#                 cum_chern_2d',
-#                 levels=-1.0:0.1:1.0,
-#                 color=:black,
-#                 linestyle=:dash,
-#                 linewidth=0.8,
-#                 contour_labels=true,
-#                 colorbar_entry=false
-#             )
-#         end
-
-#         return p
-#     end
-
-#     return plot(plots[1], plots[2], layout=(1, 2), size=(900, 400))
-# end
-
-# function plt_berry_curvature_heatmaps(
-#     kx_vals::Vector{Float64},
-#     ky_vals::Vector{Float64},
-#     berry_curvature::Array{Float64, 3},
-#     plaquette_energies::Array{Float64, 3};
-#     title::LaTeXString=L"",
-#     xlabel::LaTeXString=L"k_x",
-#     ylabel::LaTeXString=L"k_y",
-#     colour=:RdBu,
-#     shift_to_centers::Bool=false,
-#     share_colour_scale::Bool=true,
-#     add_contours::Bool=true,
-#     n_contour_levels::Int=6
-# )
-#     """
-#     Plots the local k-resolved contribution to the Chern number (F_{xy} / 2π)
-#     for both bands side-by-side, with band-specific contours showing energy-cumulative Chern values.
-#     """
-#     chern_density = berry_curvature ./ (2π)
-
-#     dkx = kx_vals[2] - kx_vals[1]
-#     dky = ky_vals[2] - ky_vals[1]
-#     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
-#     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
-
-#     global_max = share_colour_scale ? maximum(abs, chern_density[1:2, :, :]) : 0.0
-
-#     plots = map(1:2) do band_index
-#         density_b = chern_density[band_index, :, :]
-#         energies_b = plaquette_energies[band_index, :, :]
-
-#         # 1. Prepare Transposed Arrays for Plotting Alignment
-#         # Plots.jl expects matrix z such that z[iy, ix] maps to (x[ix], y[iy])
-#         density_transposed = density_b'
-#         energies_transposed = energies_b'
-
-#         # 2. Compute Cumulative Chern Field on Transposed Grid
-#         flat_E = vec(energies_transposed)
-#         flat_F = vec(density_transposed)
-#         order = sortperm(flat_E)
-        
-#         cum_chern_sorted = cumsum(flat_F[order])
-        
-#         # Map sorted cumulative values directly into the transposed 2D grid layout
-#         cum_chern_2d_transposed = zeros(Float64, size(energies_transposed))
-#         cum_chern_2d_transposed[order] .= cum_chern_sorted
-
-#         # 3. Setup Subplot Properties
-#         c_limits = share_colour_scale ? 
-#             (-global_max, global_max) : 
-#             let max_val = maximum(abs, density_b)
-#                 (-max_val, max_val)
-#             end
-
-#         total_chern = round(sum(density_b), digits=4)
-#         sub_title = isempty(title) ? 
-#             L"F_{xy} / 2\pi \text{ (Band %$(band_index), C = %$(total_chern))}" : 
-#             L"%$(title) \text{ (Band %$(band_index), C = %$(total_chern))}"
-
-#         # 4. Base Heatmap Plot
-#         p = heatmap(
-#             x_coords,
-#             y_coords,
-#             density_transposed,
-#             xlabel=xlabel,
-#             ylabel=ylabel,
-#             title=sub_title,
-#             color=colour,
-#             clims=c_limits,
-#             aspect_ratio=:equal
-#         )
-
-#         # 5. Overlay Energy-Accumulated Chern Contours
-#         if add_contours
-#             # Ensure levels are sorted in ascending order for Plots.jl / GR
-#             raw_levels = range(0.0, total_chern, length=n_contour_levels)
-#             contour_levels = sort(collect(raw_levels))
-
-#             contour!(
-#                 p,
-#                 x_coords,
-#                 y_coords,
-#                 cum_chern_2d_transposed, # Already transposed to match density_transposed!
-#                 levels=contour_levels,
-#                 color=:black,
-#                 linestyle=:dash,
-#                 linewidth=0.8,
-#                 contour_labels=true,
-#                 colorbar_entry=false
-#             )
-#         end
-
-#         return p
-#     end
-
-#     return plot(plots[1], plots[2], layout=(1, 2), size=(900, 400))
-# end
 
 
 function plt_berry_curvature_heatmaps(
@@ -692,6 +566,507 @@ function plt_accumulated_chern_heatmaps(
     return plot(plots[1], plots[2], layout=(1, 2), size=(950, 400))
 end
 
+function plt_edge_state_prediction(
+    data; 
+    title::LaTeXString=L"", 
+    colour=:thermal
+)
+    gap_transposed = data.bulk_gap'
+
+    # Base heatmap of the bulk gap
+    p = heatmap(
+        data.kx_vals,
+        data.ky_vals,
+        gap_transposed,
+        xlabel=L"k_x",
+        ylabel=L"k_y",
+        title=isempty(title) ? L"\text{Bulk Gap } \Delta E(k_x, k_y)" : title,
+        color=colour,
+        aspect_ratio=:equal,
+        colorbar_title=L"\Delta E"
+    )
+
+    # Contour dz = 0 (Extents of the edge state boundary locus)
+    contour!(
+        p,
+        data.kx_vals,
+        data.ky_vals,
+        data.dz_locus',
+        levels=[0.0],
+        color=:white,
+        linewidth=2,
+        linestyle=:dash,
+        label=L"d_z(k) = 0 \text{ (Edge Extent)}"
+    )
+
+    # Overlay band gap crossing points (where edge states close/cross)
+    if !isempty(data.edge_crossings)
+        x_pts = [pt.kx for pt in data.edge_crossings]
+        y_pts = [pt.ky for pt in data.edge_crossings]
+
+        scatter!(
+            p,
+            x_pts,
+            y_pts,
+            markersize=6,
+            markercolor=:red,
+            # markershape=:xcross,
+            markerstrokewidth=2,
+            label=L"\text{Dirac/Crossing Points}"
+        )
+    end
+
+    return p
+end
+
+function plt_accumulated_chern_energy_vs_gamma(
+    gamma_data_pairs::Vector{<:Tuple{Real, Any}}; 
+    target_p::Float64=0.5, 
+    target_q::Float64=0.0,
+    tol::Float64=0.01
+)
+    # Buffers for Band 1 (±p, ±q)
+    g_b1_pos_p, e_b1_pos_p = Float64[], Float64[]
+    g_b1_neg_p, e_b1_neg_p = Float64[], Float64[]
+    g_b1_pos_q, e_b1_pos_q = Float64[], Float64[]
+    g_b1_neg_q, e_b1_neg_q = Float64[], Float64[]
+
+    # Buffers for Band 2 (±p, ±q)
+    g_b2_pos_p, e_b2_pos_p = Float64[], Float64[]
+    g_b2_neg_p, e_b2_neg_p = Float64[], Float64[]
+    g_b2_pos_q, e_b2_pos_q = Float64[], Float64[]
+    g_b2_neg_q, e_b2_neg_q = Float64[], Float64[]
+
+    q_is_zero = abs(target_q) < 1e-8
+
+    for (gamma, band_data) in gamma_data_pairs
+        g = Float64(gamma)
+
+        # 2D field extractions per band
+        cum_1 = band_data.cum_chern_per_band[1, :, :]
+        E_1   = band_data.plaquette_energies[1, :, :]
+
+        cum_2 = band_data.cum_chern_per_band[2, :, :]
+        E_2   = band_data.plaquette_energies[2, :, :]
+
+        # --- Band 1 (±p and ±q) ---
+        for i in findall(v -> abs(v - target_p) <= tol, cum_1)
+            push!(g_b1_pos_p, g); push!(e_b1_pos_p, E_1[i])
+        end
+        for i in findall(v -> abs(v + target_p) <= tol, cum_1)
+            push!(g_b1_neg_p, g); push!(e_b1_neg_p, E_1[i])
+        end
+        for i in findall(v -> abs(v - target_q) <= tol, cum_1)
+            push!(g_b1_pos_q, g); push!(e_b1_pos_q, E_1[i])
+        end
+        if !q_is_zero
+            for i in findall(v -> abs(v + target_q) <= tol, cum_1)
+                push!(g_b1_neg_q, g); push!(e_b1_neg_q, E_1[i])
+            end
+        end
+
+        # --- Band 2 (±p and ±q) ---
+        for i in findall(v -> abs(v - target_p) <= tol, cum_2)
+            push!(g_b2_pos_p, g); push!(e_b2_pos_p, E_2[i])
+        end
+        for i in findall(v -> abs(v + target_p) <= tol, cum_2)
+            push!(g_b2_neg_p, g); push!(e_b2_neg_p, E_2[i])
+        end
+        for i in findall(v -> abs(v - target_q) <= tol, cum_2)
+            push!(g_b2_pos_q, g); push!(e_b2_pos_q, E_2[i])
+        end
+        if !q_is_zero
+            for i in findall(v -> abs(v + target_q) <= tol, cum_2)
+                push!(g_b2_neg_q, g); push!(e_b2_neg_q, E_2[i])
+            end
+        end
+    end
+
+    # Dynamic label formatting for q
+    lbl_q_b1_pos = q_is_zero ? "Band 1, " * L" %$(target_q)" : "Band 1, " * L" +%$(target_q)"
+    lbl_q_b2_pos = q_is_zero ? "Band 2, " * L" %$(target_q)" : "Band 2, " * L" +%$(target_q)"
+
+    # Series metadata: (Buffers, Label, Color, Shape)
+    series_configs = [
+        # Band 1
+        (g_b1_pos_p, e_b1_pos_p, "Band 1, " * L" +%$(target_p)", :steelblue, :circle),
+        (g_b1_neg_p, e_b1_neg_p, "Band 1, " * L" -%$(target_p)", :steelblue, :diamond),
+        (g_b1_pos_q, e_b1_pos_q, lbl_q_b1_pos,                  :blue,      :utriangle),
+        (g_b1_neg_q, e_b1_neg_q, "Band 1, " * L" -%$(target_q)", :blue,      :dtriangle),
+        
+        # Band 2
+        (g_b2_pos_p, e_b2_pos_p, "Band 2, " * L" +%$(target_p)", :red,    :circle),
+        (g_b2_neg_p, e_b2_neg_p, "Band 2, " * L" -%$(target_p)", :red,    :diamond),
+        (g_b2_pos_q, e_b2_pos_q, lbl_q_b2_pos,                  :orange, :utriangle),
+        (g_b2_neg_q, e_b2_neg_q, "Band 2, " * L" -%$(target_q)", :orange, :dtriangle)
+    ]
+
+    # Title logic
+    title_str = if target_p == target_q
+        "Energy at Contour " * L"\mathcal{C}(E, k_x, k_y) = \pm %$(target_p)"
+    elseif q_is_zero
+        "Energy at Contours " * L"\mathcal{C}(E, k_x, k_y) = \pm %$(target_p), %$(target_q)"
+    else
+        "Energy at Contours " * L"\mathcal{C}(E, k_x, k_y) = \pm %$(target_p), \pm %$(target_q)"
+    end
+
+    # Aggregate global energy bounds for y-ticks
+    all_energies = Float64[]
+    for (g_pts, e_pts, _, _, _) in series_configs
+        if !isempty(g_pts)
+            append!(all_energies, e_pts)
+        end
+    end
+
+    global_yticks = if !isempty(all_energies)
+        floor(Int, minimum(all_energies)):1:ceil(Int, maximum(all_energies))
+    else
+        :auto
+    end
+
+    p = nothing
+
+    # Render non-empty series
+    for (g_pts, e_pts, lbl, clr, shp) in series_configs
+        if !isempty(g_pts)
+            if isnothing(p)
+                p = scatter(
+                    g_pts, e_pts,
+                    xlabel = L"\gamma",
+                    ylabel = L"E",
+                    title = title_str,
+                    label = lbl,
+                    yticks = global_yticks,
+                    color = clr,
+                    markershape = shp,
+                    markersize = 3,
+                    markerstrokewidth = 0,
+                    alpha = 0.6
+                )
+            else
+                scatter!(
+                    p,
+                    g_pts, e_pts,
+                    label = lbl,
+                    color = clr,
+                    markershape = shp,
+                    markersize = 3,
+                    markerstrokewidth = 0,
+                    alpha = 0.6
+                )
+            end
+        end
+    end
+
+    # Empty canvas fallback
+    if isnothing(p)
+        fallback_title = q_is_zero ? 
+            "No contours found for p = ±$(target_p), q = $(target_q)" :
+            "No contours found for p = ±$(target_p), q = ±$(target_q)"
+        p = plot(
+            xlabel = L"\gamma",
+            ylabel = L"E",
+            title = fallback_title
+        )
+    end
+
+    return p
+end
+
+
+
+function plt_joint_band_accumulated_chern_heatmap(
+    kx_vals::Vector{Float64},
+    ky_vals::Vector{Float64},
+    berry_curvature::Array{Float64, 3},
+    plaquette_energies::Array{Float64, 3},
+    E_cut::Float64,
+    gamma::Float64;
+    global_clims::Union{Nothing, Tuple{Float64, Float64}}=nothing,
+    title::LaTeXString=L"",
+    xlabel::LaTeXString=L"k_x",
+    ylabel::LaTeXString=L"k_y",
+    colour=:RdBu,
+    shift_to_centers::Bool=false
+)
+    n_bands, nkx, nky = size(plaquette_energies)
+    cum_2d = zeros(Float64, nkx, nky)
+    
+    # Sum over all bands at each k-point up to cutoff energy E_cut
+    for n in 1:n_bands, i in 1:nkx, j in 1:nky
+        if plaquette_energies[n, i, j] <= E_cut
+            cum_2d[i, j] += berry_curvature[n, i, j] / (2π)
+        end
+    end
+
+    dkx = kx_vals[2] - kx_vals[1]
+    dky = ky_vals[2] - ky_vals[1]
+    x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
+    y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
+
+    cum_transposed = cum_2d'
+    total_chern = round(sum(cum_2d), digits=4)
+
+    E_str = @sprintf("%.3f", E_cut)
+    t_str = L"C(k_x, k_y; E < %$(E_str)), \gamma=%$(gamma), C_{tot} = %$(total_chern)"
+
+    # 1. Base scaling exponent on global_clims if passed, else fallback to current frame
+    ref_max = isnothing(global_clims) ? maximum(abs, cum_transposed) : maximum(abs, global_clims)
+    exponent = ref_max == 0 ? 0 : floor(Int, log10(ref_max))
+    scale_factor = 10.0^(-exponent)
+
+    # 2. Scale both the heatmap matrix and colorbar limits consistently
+    scaled_data = cum_transposed .* scale_factor
+    scaled_clims = isnothing(global_clims) ? 
+        (-maximum(abs, scaled_data), maximum(abs, scaled_data)) : 
+        (global_clims[1] * scale_factor, global_clims[2] * scale_factor)
+
+    cbar_label = exponent == 0 ? 
+        L"\mathcal{C}(k_x, k_y)" : 
+        L"\mathcal{C}(k_x, k_y) \times 10^{%$(exponent)}"
+
+    return heatmap(
+        x_coords, y_coords, scaled_data, #cum_transposed,
+        xlabel=xlabel, ylabel=ylabel, title=t_str,
+        color=colour, aspect_ratio=:equal, colorbar_title=cbar_label, #colorbar_title=L"\mathcal{C}(k_x, k_y)",
+        clims=scaled_clims,
+        xlims=(minimum(x_coords), maximum(x_coords)),
+        ylims=(minimum(y_coords), maximum(y_coords)),
+        xticks=pi_ticks, yticks=pi_ticks,
+    )
+end
+
+
+function plt_joint_band_accumulated_chern_energy_vs_gamma(
+    gamma_data_pairs::Vector{<:Tuple{Real, Any}}; 
+    target_p::Float64=0.5, 
+    target_q::Float64=0.0,
+    tol::Float64=0.01,
+    ylims::Union{Nothing, Tuple{Float64, Float64}}=nothing
+)
+    # Global buffers unified across all bands (grouped by contour target)
+    g_pos_p, e_pos_p = Float64[], Float64[]
+    g_neg_p, e_neg_p = Float64[], Float64[]
+    g_pos_q, e_pos_q = Float64[], Float64[]
+    g_neg_q, e_neg_q = Float64[], Float64[]
+
+    q_is_zero = abs(target_q) < 1e-8
+
+    for (gamma, band_data) in gamma_data_pairs
+        g = Float64(gamma)
+
+        # 1. Flatten energy and Berry curvature across all bands
+        E_flat = vec(band_data.plaquette_energies)
+
+        # 2. Compute global energy-accumulated Chern number across all overlapping bands
+        cum_flat = if hasproperty(band_data, :cum_chern_global)
+            vec(band_data.cum_chern_global)
+        elseif hasproperty(band_data, :berry_curvature)
+            # Sort all plaquettes globally by energy
+            b_flat = vec(band_data.berry_curvature) ./ (2π)
+            sort_idx = sortperm(E_flat)
+            
+            # Accumulate along ascending energy order
+            cum_sorted = cumsum(b_flat[sort_idx])
+            
+            # Restore to original index mapping
+            cum_resorted = similar(cum_sorted)
+            cum_resorted[sort_idx] = cum_sorted
+            cum_resorted
+        else
+            # Fallback: flatten existing accumulated array
+            vec(band_data.cum_chern_per_band)
+        end
+
+        # 3. Filter points matching target contours (independent of band index)
+        for i in findall(v -> abs(v - target_p) <= tol, cum_flat)
+            push!(g_pos_p, g); push!(e_pos_p, E_flat[i])
+        end
+        for i in findall(v -> abs(v + target_p) <= tol, cum_flat)
+            push!(g_neg_p, g); push!(e_neg_p, E_flat[i])
+        end
+        for i in findall(v -> abs(v - target_q) <= tol, cum_flat)
+            push!(g_pos_q, g); push!(e_pos_q, E_flat[i])
+        end
+        if !q_is_zero
+            for i in findall(v -> abs(v + target_q) <= tol, cum_flat)
+                push!(g_neg_q, g); push!(e_neg_q, E_flat[i])
+            end
+        end
+    end
+
+    # Dynamic label formatting
+    lbl_q_pos = q_is_zero ? L"C = %$(target_q)" : L"C = +%$(target_q)"
+
+    # Series configurations grouped by target Chern value (Color/Shape = Target Value)
+    series_configs = [
+        (g_pos_p, e_pos_p, L"C = +%$(target_p)", :steelblue,  :circle),
+        (g_neg_p, e_neg_p, L"C = -%$(target_p)", :crimson,    :diamond),
+        (g_pos_q, e_pos_q, lbl_q_pos,                      :forestgreen,:utriangle),
+        (g_neg_q, e_neg_q, L"C = -%$(target_q)", :darkorange, :dtriangle)
+    ]
+
+    # Title generation
+    title_str = if target_p == target_q
+        "Global Energy Contours at " * L"C(E) = \pm %$(target_p)"
+    elseif q_is_zero
+        "Global Energy Contours at " * L"C(E) = \pm %$(target_p), %$(target_q)"
+    else
+        "Global Energy Contours at " * L"C(E) = \pm %$(target_p), \pm %$(target_q)"
+    end
+
+    # Axis tick bounds
+    all_energies = Float64[]
+    for (g_pts, e_pts, _, _, _) in series_configs
+        if !isempty(g_pts)
+            append!(all_energies, e_pts)
+        end
+    end
+
+    global_yticks = if !isempty(all_energies)
+        floor(Int, minimum(all_energies)):1:ceil(Int, maximum(all_energies))
+    else
+        :auto
+    end
+
+    p = nothing
+
+    # Render unified series
+    for (g_pts, e_pts, lbl, clr, shp) in series_configs
+        if !isempty(g_pts)
+            if isnothing(p)
+                p = scatter(
+                    g_pts, e_pts,
+                    xlabel = L"\gamma",
+                    ylabel = L"E",
+                    title = title_str,
+                    label = lbl,
+                    yticks = global_yticks,
+                    color = clr,
+                    markershape = shp,
+                    markersize = 3,
+                    markerstrokewidth = 0,
+                    alpha = 0.6
+                )
+            else
+                scatter!(
+                    p,
+                    g_pts, e_pts,
+                    label = lbl,
+                    color = clr,
+                    markershape = shp,
+                    markersize = 3,
+                    markerstrokewidth = 0,
+                    alpha = 0.6
+                )
+            end
+        end
+    end
+
+    # Fallback canvas if empty
+    if isnothing(p)
+        fallback_title = q_is_zero ? 
+            "No global contours found for p = ±$(target_p), q = $(target_q)" :
+            "No global contours found for p = ±$(target_p), q = ±$(target_q)"
+        p = plot(
+            xlabel = L"\gamma",
+            ylabel = L"E",
+            title = fallback_title
+        )
+    end
+
+    return p
+end
+
+
+function plt_joint_band_accumulated_chern_extrema_vs_gamma(
+    gamma_data_pairs::Vector{<:Tuple{Real, Any}}; 
+    tol::Float64=0.01,
+    ylims::Union{Nothing, Tuple{Float64, Float64}}=nothing
+)
+    # Buffers for accepted max and min Chern states
+    g_max, e_max = Float64[], Float64[]
+    g_min, e_min = Float64[], Float64[]
+
+    for (gamma, band_data) in gamma_data_pairs
+        g = Float64(gamma)
+
+        # 1. Flatten energy across all bands
+        E_flat = vec(band_data.plaquette_energies)
+
+        # 2. Compute global energy-accumulated Chern numbers across overlapping bands
+        cum_flat = if hasproperty(band_data, :cum_chern_global)
+            vec(band_data.cum_chern_global)
+        elseif hasproperty(band_data, :berry_curvature)
+            b_flat = vec(band_data.berry_curvature) ./ (2π)
+            sort_idx = sortperm(E_flat)
+            cum_sorted = cumsum(b_flat[sort_idx])
+            cum_resorted = similar(cum_sorted)
+            cum_resorted[sort_idx] = cum_sorted
+            cum_resorted
+        else
+            vec(band_data.cum_chern_per_band)
+        end
+
+        # 3. Dynamic extrema detection for this specific gamma
+        c_max_val = maximum(cum_flat)
+        c_min_val = minimum(cum_flat)
+
+        # 4. Filter indices within tolerance of max and min
+        idx_max = findall(v -> abs(v - c_max_val) <= tol, cum_flat)
+        idx_min = findall(v -> abs(v - c_min_val) <= tol, cum_flat)
+
+        for i in idx_max
+            push!(g_max, g)
+            push!(e_max, E_flat[i])
+        end
+
+        # Prevent duplicate series overlay if max and min coincide (e.g., trivial zero bands)
+        if abs(c_max_val - c_min_val) > tol
+            for i in idx_min
+                push!(g_min, g)
+                push!(e_min, E_flat[i])
+            end
+        end
+    end
+
+    # Series configurations
+    series_configs = [
+        (g_max, e_max, L"\mathcal{C}_{\text{max}}", :crimson, :circle),
+        (g_min, e_min, L"\mathcal{C}_{\text{min}}", :steelblue, :diamond)
+    ]
+
+    p = plot(
+        xlabel = L"\gamma",
+        ylabel = L"E",
+        title = L"\text{Energies at } \mathcal{C}_{\text{max}} \text{ and } \mathcal{C}_{\text{min}} \text{ vs } \gamma",
+        legend = :best
+    )
+
+    if !isnothing(ylims)
+        plot!(p, ylims = ylims)
+    end
+
+    # Overlay non-empty extrema series
+    for (g_pts, e_pts, lbl, clr, shp) in series_configs
+        if !isempty(g_pts)
+            scatter!(
+                p,
+                g_pts, e_pts,
+                label = lbl,
+                color = clr,
+                markershape = shp,
+                markersize = 3,
+                markerstrokewidth = 0,
+                alpha = 0.6
+            )
+        end
+    end
+
+    return p
+end
+
+
 
 ############################################################################
 
@@ -775,10 +1150,10 @@ Computing the PBS bandstructure and its berry curvature for distorted QWZ model
 As = [1.0]
 Bs = [1.0]
 ms = [-1.0]
-gammas = collect(0.0:0.1:3.0)
+gammas = collect(-3.0:0.1:3.0)
 distortion_type = :symmetric
-Nkx = 101
-Nky = 101
+Nkx = 301
+Nky = 301
 
 data_folder = joinpath("data", "bulk_band_berry_data")
 plot_folder = joinpath("plots", "bulk_band_berry_data")
@@ -786,12 +1161,13 @@ isdir(data_folder) || mkpath(data_folder)
 isdir(plot_folder) || mkpath(plot_folder)
 
 generate_new_data = true
-generate_new_plots = true
+generate_new_plots = false
+generate_gamma_scatter = true
 
 if generate_new_data
     println("Generating new data...")
     @showprogress for (A, B, m, gamma) in Iterators.product(As, Bs, ms, gammas)
-        data = compute_bulk_band_berry_data(
+        band_data = compute_bulk_band_berry_data(
             Nkx=101,
             Nky=101,
             A=A,
@@ -800,6 +1176,21 @@ if generate_new_data
             gamma=gamma,
             perturbation_type=distortion_type
         )
+
+        edge_state_data = edge_state_prediction(
+            Nkx=101,
+            Nky=101,
+            A=A,
+            B=B,
+            m=m,
+            gamma=gamma,
+            perturbation_type=distortion_type
+        )
+
+        data = (
+            band = band_data,
+            edge = edge_state_data
+        ) 
 
         save_path = joinpath(data_folder, "bandstrucutre_data")
         isdir(save_path) || mkpath(save_path)
@@ -831,64 +1222,162 @@ if generate_new_plots
         # 3. Load the NamedTuple directly
         @load filepath data
 
-        # 4. Bare bandstructure heatmaps for both bands
-        bandstruct_heatmaps = plt_bandstructure_heatmap(
-            data.kx_vals,
-            data.ky_vals,
-            data.energies;
-            title = L"\gamma = %$(gamma)",
-            colour = :curl,
-            share_colour_scale = false
-        )
+        # # 4. Bare bandstructure heatmaps for both bands
+        # bandstruct_heatmaps = plt_bandstructure_heatmap(
+        #     data.band.kx_vals,
+        #     data.band.ky_vals,
+        #     data.band.energies;
+        #     title = L"\gamma = %$(gamma)",
+        #     colour = :curl,
+        #     share_colour_scale = false
+        # )
         
-        savefig(
-            bandstruct_heatmaps, 
-            joinpath(plot_folder, "bulk_bandstruct_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
-        )
+        # savefig(
+        #     bandstruct_heatmaps, 
+        #     joinpath(plot_folder, "bulk_bandstruct_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
+        # )
 
-        # 5. Plot the Berry curvature heatmaps. F_xy flux per plaquette resolved for (kx, ky) for both bands.
-        F_xy_heatmaps = plt_k_resolved_F_xy_heatmaps(
-            data.kx_vals,
-            data.ky_vals,
-            data.berry_curvature;
-            title = L"\gamma = %$(gamma), F_{xy} / 2\pi",
-            # colour = :RdBu,
-            # share_colour_scale = false
-        )
-
-        savefig(
-            F_xy_heatmaps, 
-            joinpath(plot_folder, "bulk_band_dEdC_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
-        )
-
-        # # 6. Plot the same as 6. but including contours of the energy-accumulated Chern number 
-        # # BROKEN CONTOURS
-        # chern_heatmaps = plt_berry_curvature_heatmaps(
-        #     data.kx_vals,
-        #     data.ky_vals,
-        #     data.berry_curvature,
-        #     data.plaquette_energies;
+        # # 5. Plot the Berry curvature heatmaps. F_xy flux per plaquette resolved for (kx, ky) for both bands.
+        # F_xy_heatmaps = plt_k_resolved_F_xy_heatmaps(
+        #     data.band.kx_vals,
+        #     data.band.ky_vals,
+        #     data.band.berry_curvature;
         #     title = L"\gamma = %$(gamma), F_{xy} / 2\pi",
-        #     add_contours = true
+        #     # colour = :RdBu,
+        #     # share_colour_scale = false
         # )
 
         # savefig(
-        #     chern_heatmaps, 
-        #     joinpath(plot_folder, "bulk_band_dEdC_contours_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
+        #     F_xy_heatmaps, 
+        #     joinpath(plot_folder, "bulk_band_dEdC_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
         # )
 
-        # 7. Plot the accumulated chern number as a heatmap on (kx, ky) grid
-        cum_chern_heatmaps = plt_accumulated_chern_heatmaps(
-            data.kx_vals,
-            data.ky_vals,
-            data.cum_chern_per_band;
-            title = L"\gamma = %$(gamma), \mathcal{C}(k_x, k_y)",
-            colour = :viridis
+        # # 6. Plot the accumulated chern number as a heatmap on (kx, ky) grid
+        # cum_chern_heatmaps = plt_accumulated_chern_heatmaps(
+        #     data.band.kx_vals,
+        #     data.band.ky_vals,
+        #     data.band.cum_chern_per_band;
+        #     title = L"\gamma = %$(gamma), \mathcal{C}(k_x, k_y)",
+        #     colour = :viridis
+        # )
+
+        # savefig(
+        #     cum_chern_heatmaps, 
+        #     joinpath(plot_folder, "bulk_band_accumulated_chern_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
+        # )
+
+        # # 7. Plot the bandgap heatmap and edge state predictions
+        # edge_state_heatmap = plt_edge_state_prediction(
+        #     data.edge;
+        #     title = L"\gamma = %$(gamma), \Delta E(k_x, k_y) \text{ and Edge State Predictions}",
+        #     colour = :thermal
+        # )
+
+        # savefig(
+        #     edge_state_heatmap, 
+        #     joinpath(plot_folder, "bulk_band_edge_state_prediction_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
+        # )
+
+        # 8. Plot the heatmap of accumulated berry curvature given overlapping bands at fermi energy E_cut
+        energies = data.band.plaquette_energies
+        E_cuts = collect(range(minimum(energies), stop=maximum(energies), length=50))
+
+        # Pre-compute global clims across ALL E_cuts for this specific gamma
+        n_bands, nkx, nky = size(energies)
+        max_abs_gamma = 0.0
+
+        for E_cut in E_cuts
+            cum_2d = zeros(Float64, nkx, nky)
+            for n in 1:n_bands, i in 1:nkx, j in 1:nky
+                if energies[n, i, j] <= E_cut
+                    cum_2d[i, j] += data.band.berry_curvature[n, i, j] / (2π)
+                end
+            end
+            max_abs_gamma = max(max_abs_gamma, maximum(abs, cum_2d))
+        end
+
+        # Set symmetric bounds around zero
+        global_clims = (-max_abs_gamma, max_abs_gamma)
+
+        for (idx, E_cut) in enumerate(E_cuts)
+
+            cum_chern_E_cut_heatmap = plt_joint_band_accumulated_chern_heatmap(
+                data.band.kx_vals,
+                data.band.ky_vals,
+                data.band.berry_curvature,
+                data.band.plaquette_energies,
+                E_cut,
+                gamma;
+                global_clims=global_clims,
+                colour = :RdBu
+            )
+
+            savefig(
+                cum_chern_E_cut_heatmap, 
+                joinpath(plot_folder, "$(idx)_bulk_band_accumulated_chern_Ecut_$(round(E_cut, digits=2))_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
+            )
+        end
+    end
+    
+end
+
+
+
+if generate_gamma_scatter
+    println("Generating gamma scatter plot...")
+    gamma_data_list = Tuple{Float64, Any}[]
+    data_to_unpack = joinpath(data_folder, "bandstrucutre_data")
+
+    for (A, B, m, gamma) in Iterators.product(As, Bs, ms, gammas)
+        filename = "bulk_band_berry_data_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).jld2"
+        filepath = joinpath(data_to_unpack, filename)
+
+        if isfile(filepath)
+            @load filepath data
+
+            # Robust unpacking for NamedTuple or Dict[cite: 2]
+            band_data = if hasproperty(data, :band)
+                data.band
+            elseif data isa AbstractDict && haskey(data, :band)
+                data[:band]
+            else
+                data
+            end
+
+            push!(gamma_data_list, (gamma, band_data))
+        end
+    end
+
+    if !isempty(gamma_data_list)
+        band_separated_plt = plt_accumulated_chern_energy_vs_gamma(
+            gamma_data_list; 
+            target_p = 0.5, 
+            target_q = 0.05,
+            tol = 0.005
         )
 
-        savefig(
-            cum_chern_heatmaps, 
-            joinpath(plot_folder, "bulk_band_accumulated_chern_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).png")
+        m_val = ms[1]
+        A_val = As[1]
+        B_val = Bs[1]
+
+        # gamma_range_str = "$(minimum(gammas))_to_$(maximum(gammas))"
+        savefig(band_separated_plt, joinpath(plot_folder, "energy_at_accumulated_chern_0.5_vs_gamma$(minimum(gammas))-$(maximum(gammas))_A$(A_val)_B$(B_val)_m$(m_val).png"))
+
+
+        band_joint_plot = plt_joint_band_accumulated_chern_energy_vs_gamma(
+            gamma_data_list; 
+            target_p = 0.5, 
+            target_q = 0.0,
+            tol = 0.005
         )
+
+        savefig(band_joint_plot, joinpath(plot_folder, "energy_at_joint_band_accumulated_chern_0.5_vs_gamma$(minimum(gammas))-$(maximum(gammas))_A$(A_val)_B$(B_val)_m$(m_val).png"))
+
+        band_extrema_plot = plt_joint_band_accumulated_chern_extrema_vs_gamma(
+            gamma_data_list; 
+            tol = 0.005
+        )
+
+        savefig(band_extrema_plot, joinpath(plot_folder, "energy_at_joint_band_accumulated_chern_extrema_vs_gamma$(minimum(gammas))-$(maximum(gammas))_A$(A_val)_B$(B_val)_m$(m_val).png"))
     end
 end

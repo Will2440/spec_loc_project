@@ -250,6 +250,206 @@ function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{
     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
 end
 
+## only one contour
+# function plt_accumulated_chern_heatmaps(
+#     kx_vals::Vector{Float64}, 
+#     ky_vals::Vector{Float64}, 
+#     cum_chern_per_band::Array{Float64, 3}; 
+#     title::LaTeXString=L"", 
+#     xlabel::LaTeXString=L"k_x",
+#     ylabel::LaTeXString=L"k_y", 
+#     colour=:viridis, 
+#     shift_to_centers::Bool=false,
+#     add_contour::Bool=true,
+#     contour_value_1::Float64=0.5,
+#     contour_value_2::Float64=0.0
+# )
+
+#     dkx = kx_vals[2] - kx_vals[1]
+#     dky = ky_vals[2] - ky_vals[1]
+#     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
+#     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
+
+#     plots = map(1:2) do band_index
+#         cum_transposed = cum_chern_per_band[band_index, :, :]'
+#         min_val = minimum(cum_transposed)
+#         max_val = maximum(cum_transposed)
+#         total_chern = abs(max_val) > abs(min_val) ? round(max_val, digits=4) : round(min_val, digits=4)
+#         sub_title = "Chern number accumulated: " * L"C(E, k_x, k_y)" #L"\\text{Chern number accumulated: } C(E, k_x, k_y)"
+#         p = heatmap(
+#             x_coords, 
+#             y_coords, 
+#             cum_transposed, 
+#             xlabel=xlabel, 
+#             ylabel=ylabel, 
+#             title=sub_title, 
+#             color=colour, 
+#             clims=(min_val, max_val), 
+#             xlims=(-pi, pi), 
+#             ylims=(-pi, pi), 
+#             xticks=pi_ticks, 
+#             yticks=pi_ticks, 
+#             aspect_ratio=:equal, 
+#             colorbar_title=L"C(E, k_x, k_y)"
+#             )
+
+#         # Overlay ± Critical Contour Lines
+#         if add_contour
+#             target_val = abs(contour_value)
+            
+#             # Collect both +val and -val if they exist in the band's value range
+#             levels_to_draw = Float64[]
+#             if min_val <= target_val <= max_val
+#                 push!(levels_to_draw, target_val)
+#             end
+#             if min_val <= -target_val <= max_val
+#                 push!(levels_to_draw, -target_val)
+#             end
+
+#             # Plot contours if any valid targets were found
+#             if !isempty(levels_to_draw)
+#                 contour!(
+#                     p,
+#                     x_coords,
+#                     y_coords,
+#                     cum_transposed,
+#                     levels=levels_to_draw,        # Evaluates +c and/or -c isolines
+#                     color=:white,                 # High-contrast isoline color
+#                     linewidth=1.5,
+#                     linestyle=:solid,
+#                     contour_labels=true,          # Annotates each line with +0.5 or -0.5
+#                     colorbar_entry=false
+#                 )
+#             end
+#         end
+
+#         return p
+
+#     end
+#     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
+# end
+
+# ## two contours
+
+
+# function plt_accumulated_chern_heatmaps(
+#     kx_vals::Vector{Float64}, 
+#     ky_vals::Vector{Float64}, 
+#     cum_chern_per_band::Array{Float64, 3}; 
+#     title::LaTeXString=L"", 
+#     xlabel::LaTeXString=L"k_x",
+#     ylabel::LaTeXString=L"k_y", 
+#     colour=:viridis, 
+#     shift_to_centers::Bool=false,
+#     add_contour::Bool=true,
+#     contour_value_1::Float64=0.5,
+#     contour_value_2::Float64=0.0,
+#     tol::Float64=0.01
+# )
+
+#     dkx = kx_vals[2] - kx_vals[1]
+#     dky = ky_vals[2] - ky_vals[1]
+#     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
+#     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
+
+#     pi_ticks = (
+#         [-π, -π/2, 0, π/2, π],
+#         [L"-\pi", L"-\pi/2", L"0", L"\pi/2", L"\pi"]
+#     )
+
+#     plots = map(1:2) do band_index
+#         cum_transposed = cum_chern_per_band[band_index, :, :]'
+#         min_val = minimum(cum_transposed)
+#         max_val = maximum(cum_transposed)
+#         total_chern = abs(max_val) > abs(min_val) ? round(max_val, digits=4) : round(min_val, digits=4)
+#         sub_title = "Chern number accumulated: " * L"C(E, k_x, k_y)"
+        
+#         p = heatmap(
+#             x_coords, 
+#             y_coords, 
+#             cum_transposed, 
+#             xlabel=xlabel, 
+#             ylabel=ylabel, 
+#             title=sub_title, 
+#             color=colour, 
+#             clims=(min_val, max_val), 
+#             xlims=(-pi, pi), 
+#             ylims=(-pi, pi), 
+#             xticks=pi_ticks, 
+#             yticks=pi_ticks, 
+#             aspect_ratio=:equal, 
+#             colorbar_title=L"C(E, k_x, k_y)"
+#         )
+
+#         # Overlay ± Critical Contour Lines
+#         if add_contour
+#             # Helper: collects valid ± levels and clamps boundary levels slightly inside range
+#             get_levels = val -> begin
+#                 t_val = abs(val)
+#                 candidates = Float64[]
+
+#                 if (min_val - tol) <= t_val <= (max_val + tol)
+#                     push!(candidates, t_val)
+#                 end
+#                 if (min_val - tol) <= -t_val <= (max_val + tol)
+#                     push!(candidates, -t_val)
+#                 end
+
+#                 valid_levels = Float64[]
+#                 eps_shift = 1e-4  # Epsilon to nudge boundary targets into interpolatable range
+
+#                 for lvl in unique(candidates)
+#                     if min_val < max_val
+#                         # Clamp level strictly inside (min_val, max_val)
+#                         clamped_lvl = clamp(lvl, min_val + eps_shift, max_val - eps_shift)
+#                         push!(valid_levels, clamped_lvl)
+#                     end
+#                 end
+
+#                 return unique(valid_levels)
+#             end
+
+#             # Contour 1: Solid White Lines
+#             levels_1 = get_levels(contour_value_1)
+#             if !isempty(levels_1)
+#                 contour!(
+#                     p,
+#                     x_coords,
+#                     y_coords,
+#                     cum_transposed,
+#                     levels=levels_1,
+#                     color=:white,
+#                     linewidth=1.5,
+#                     linestyle=:solid,
+#                     contour_labels=true,
+#                     colorbar_entry=false
+#                 )
+#             end
+
+#             # Contour 2: Dashed Red Lines
+#             levels_2 = get_levels(contour_value_2)
+#             if !isempty(levels_2)
+#                 contour!(
+#                     p,
+#                     x_coords,
+#                     y_coords,
+#                     cum_transposed,
+#                     levels=levels_2,
+#                     color=:red,
+#                     linewidth=1.5,
+#                     linestyle=:dash,
+#                     contour_labels=true,
+#                     colorbar_entry=false
+#                 )
+#             end
+#         end
+
+#         return p
+#     end
+
+#     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
+# end
+
 function plt_accumulated_chern_heatmaps(
     kx_vals::Vector{Float64}, 
     ky_vals::Vector{Float64}, 
@@ -260,7 +460,9 @@ function plt_accumulated_chern_heatmaps(
     colour=:viridis, 
     shift_to_centers::Bool=false,
     add_contour::Bool=true,
-    contour_value::Float64=0.5
+    contour_value_1::Float64=0.5,
+    contour_value_2::Float64=0.0,
+    tol::Float64=0.01
 )
 
     dkx = kx_vals[2] - kx_vals[1]
@@ -268,12 +470,18 @@ function plt_accumulated_chern_heatmaps(
     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
 
+    pi_ticks = (
+        [-π, -π/2, 0, π/2, π],
+        [L"-\pi", L"-\pi/2", L"0", L"\pi/2", L"\pi"]
+    )
+
     plots = map(1:2) do band_index
         cum_transposed = cum_chern_per_band[band_index, :, :]'
         min_val = minimum(cum_transposed)
         max_val = maximum(cum_transposed)
         total_chern = abs(max_val) > abs(min_val) ? round(max_val, digits=4) : round(min_val, digits=4)
-        sub_title = "Chern number accumulated: " * L"C(E, k_x, k_y)" #L"\\text{Chern number accumulated: } C(E, k_x, k_y)"
+        sub_title = "Chern number accumulated: " * L"C(E, k_x, k_y)"
+        
         p = heatmap(
             x_coords, 
             y_coords, 
@@ -289,41 +497,62 @@ function plt_accumulated_chern_heatmaps(
             yticks=pi_ticks, 
             aspect_ratio=:equal, 
             colorbar_title=L"C(E, k_x, k_y)"
-            )
+        )
 
         # Overlay ± Critical Contour Lines
         if add_contour
-            target_val = abs(contour_value)
-            
-            # Collect both +val and -val if they exist in the band's value range
-            levels_to_draw = Float64[]
-            if min_val <= target_val <= max_val
-                push!(levels_to_draw, target_val)
-            end
-            if min_val <= -target_val <= max_val
-                push!(levels_to_draw, -target_val)
+            get_levels = val -> begin
+                # When val is 0.0, use tol as the offset to probe into + or - band regions
+                eff_val = abs(val) < 1e-8 ? tol : abs(val)
+                
+                levels = Float64[]
+                if min_val <= eff_val <= max_val
+                    push!(levels, eff_val)
+                end
+                if min_val <= -eff_val <= max_val
+                    push!(levels, -eff_val)
+                end
+                return unique(levels)
             end
 
-            # Plot contours if any valid targets were found
-            if !isempty(levels_to_draw)
+            # Contour 1: Solid White Lines
+            levels_1 = get_levels(contour_value_1)
+            if !isempty(levels_1)
                 contour!(
                     p,
                     x_coords,
                     y_coords,
                     cum_transposed,
-                    levels=levels_to_draw,        # Evaluates +c and/or -c isolines
-                    color=:white,                 # High-contrast isoline color
+                    levels=levels_1,
+                    color=:white,
                     linewidth=1.5,
                     linestyle=:solid,
-                    contour_labels=true,          # Annotates each line with +0.5 or -0.5
+                    contour_labels=true,
+                    colorbar_entry=false
+                )
+            end
+
+            # Contour 2: Dashed Red Lines
+            levels_2 = get_levels(contour_value_2)
+            if !isempty(levels_2)
+                contour!(
+                    p,
+                    x_coords,
+                    y_coords,
+                    cum_transposed,
+                    levels=levels_2,
+                    color=:red,
+                    linewidth=1.5,
+                    linestyle=:dash,
+                    contour_labels=true,
                     colorbar_entry=false
                 )
             end
         end
 
         return p
-
     end
+
     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
 end
 

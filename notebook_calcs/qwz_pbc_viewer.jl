@@ -51,28 +51,39 @@ app.layout = html_div(style=Dict("display" => "flex", "font-family" => "Arial", 
         # Model Parameters
         html_div() do
             html_label("A", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
-            dcc_input(id="input-A", type="number", value=1.0, step=0.1, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+            dcc_input(id="input-A", type="number", value=1.0, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
         end,
         
         html_div() do
             html_label("B", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
-            dcc_input(id="input-B", type="number", value=1.0, step=0.1, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+            dcc_input(id="input-B", type="number", value=1.0, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
         end,
         
         html_div() do
             html_label("m", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
-            dcc_input(id="input-m", type="number", value=-1.0, step=0.1, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+            dcc_input(id="input-m", type="number", value=-1.0, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
         end,
 
         html_div() do
             html_label("Gamma", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
-            dcc_input(id="input-gamma", type="number", value=0.0, step=0.1, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+            dcc_input(id="input-gamma", type="number", value=0.0, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
         end,
 
         html_div() do
-            html_label("Chern crit", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
-            dcc_input(id="input-contour_value", type="number", value=0.5, step=0.1, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+            html_label("Chern crit 1", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
+            dcc_input(id="input-contour_value_1", type="number", value=0.5, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
         end,
+
+        html_div() do
+            html_label("Chern crit 2", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
+            dcc_input(id="input-contour_value_2", type="number", value=0.0, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+        end,
+
+        html_div() do
+            html_label("Chern crit tol", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
+            dcc_input(id="input-contour_tol", type="number", value=0.01, step=0.001, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+        end,
+
 
         html_div() do
             html_label("Distortion Type", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
@@ -119,9 +130,11 @@ callback!(app,
     Input("input-B", "value"),
     Input("input-m", "value"),
     Input("input-gamma", "value"),
-    Input("input-contour_value", "value"),
+    Input("input-contour_value_1", "value"),
+    Input("input-contour_value_2", "value"),
+    Input("input-contour_tol", "value"),
     Input("dropdown-pert", "value")
-) do Nkx, Nky, A, B, m, gamma, contour_value, pert
+) do Nkx, Nky, A, B, m, gamma, contour_value_1, contour_value_2, contour_tol, pert
     
     # Guard against invalid or missing input values during typing
     nkx_val = isnothing(Nkx) || Nkx < 2 ? 20 : Int(Nkx)
@@ -130,7 +143,9 @@ callback!(app,
     b_val = isnothing(B) ? 1.0 : Float64(B)
     m_val = isnothing(m) ? 0.0 : Float64(m)
     g_val = isnothing(gamma) ? 0.0 : Float64(gamma)
-    c_val = isnothing(contour_value) ? 0.5 : Float64(contour_value)
+    c_val_1 = isnothing(contour_value_1) ? 0.5 : Float64(contour_value_1)
+    c_val_2 = isnothing(contour_value_2) ? 0.5 : Float64(contour_value_2)
+    c_tol = isnothing(contour_tol) ? 0.01 : Float64(contour_tol)
     pert_type = isnothing(pert) ? :none : Symbol(pert)
 
     # 1. Run the bulk computation
@@ -149,7 +164,7 @@ callback!(app,
     # 2. Render plots
     p1 = plt_bandstructure_heatmap(data.kx_vals, data.ky_vals, data.energies; title=title_str)
     p2 = plt_k_resolved_F_xy_heatmaps(data.kx_vals, data.ky_vals, data.berry_curvature; title=title_str)
-    p3 = plt_accumulated_chern_heatmaps(data.kx_vals, data.ky_vals, data.cum_chern_per_band; title=title_str, contour_value=c_val)
+    p3 = plt_accumulated_chern_heatmaps(data.kx_vals, data.ky_vals, data.cum_chern_per_band; title=title_str, contour_value_1=c_val_1, contour_value_2=c_val_2, tol=c_tol)
 
     # 3. Convert to base64 images for HTML rendering
     return plot_to_b64(p1), plot_to_b64(p2), plot_to_b64(p3)
