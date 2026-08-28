@@ -11,7 +11,7 @@ using LaTeXStrings
 using JLD2: @save, @load
 using Base.Threads
 
-export compute_bulk_band_berry_data, plt_bandstructure_heatmap
+export compute_bulk_band_berry_data, plt_bandstructure_heatmap, plt_bandstructure_fermi_surface_heatmap
 export plt_k_resolved_F_xy_heatmaps, plt_accumulated_chern_heatmaps
 export real_space_perturbed_qwz_blocks, real_space_perturbed_hamiltonian_qwz
 export k_space_perturbed_qwz_hamiltonian, unpack_saved_data, debug_accumulation_extrema
@@ -208,6 +208,49 @@ function plt_bandstructure_heatmap(kx_vals::Vector{Float64}, ky_vals::Vector{Flo
     return plot(plt_band1, plt_band2, layout=(1, 2), size=(1600, 600))
 end
 
+function plt_bandstructure_fermi_surface_heatmap(
+    kx_vals::Vector{Float64}, 
+    ky_vals::Vector{Float64}, 
+    energies::Array{Float64, 3}; 
+    fermi_energy::Real=0.0, 
+    title::LaTeXString=L"", 
+    xlabel::LaTeXString=L"k_x", 
+    ylabel::LaTeXString=L"k_y", 
+    colour=:curl, 
+    share_colour_scale::Bool=false,
+    show_fermi_contour::Bool=false,
+    mask_fermi_surface::Bool=false
+)
+
+    c_limits = share_colour_scale ? extrema(energies[1:2, :, :]) : :auto
+
+    # Create masked energy arrays: values > fermi_energy become NaN
+    b1_data = mask_fermi_surface ? ifelse.(energies[1, :, :] .<= fermi_energy, energies[1, :, :], NaN) : energies[1, :, :]
+    b2_data = mask_fermi_surface ? ifelse.(energies[2, :, :] .<= fermi_energy, energies[2, :, :], NaN) : energies[2, :, :]
+
+    # Band 1 Plot
+    plt_band1 = plot(background_color_subplot=:gray80, aspect_ratio=:equal)
+    heatmap!(plt_band1, kx_vals, ky_vals, b1_data, xlabel=xlabel, ylabel=ylabel, 
+             title="Bandstructure (Band 1 Lower)", xlims=(-pi, pi), ylims=(-pi, pi), 
+             xticks=pi_ticks, yticks=pi_ticks, color=colour, clims=c_limits, colorbar_title=L"E(k_x, k_y)")
+    
+    if show_fermi_contour
+        contour!(plt_band1, kx_vals, ky_vals, energies[1, :, :]', levels=[fermi_energy], color=:steelblue, linewidth=2.0)
+    end
+
+    # Band 2 Plot
+    plt_band2 = plot(background_color_subplot=:gray80, aspect_ratio=:equal)
+    heatmap!(plt_band2, kx_vals, ky_vals, b2_data, xlabel=xlabel, ylabel=ylabel, 
+             title="Bandstructure (Band 2 Upper)", xlims=(-pi, pi), ylims=(-pi, pi), 
+             xticks=pi_ticks, yticks=pi_ticks, color=colour, clims=c_limits, colorbar_title=L"E(k_x, k_y)")
+    
+    if show_fermi_contour
+        contour!(plt_band2, kx_vals, ky_vals, energies[2, :, :]', levels=[fermi_energy], color=:steelblue, linewidth=2.0)
+    end
+
+    return plot(plt_band1, plt_band2, layout=(1, 2), size=(1600, 600))
+end
+
 function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{Float64}, berry_curvature::Array{Float64, 3}; title::LaTeXString=L"", xlabel::LaTeXString=L"k_x", ylabel::LaTeXString=L"k_y", colour=:RdBu, shift_to_centers::Bool=false, share_colour_scale::Bool=false)
     chern_density = berry_curvature ./ (2π)
     dkx = kx_vals[2] - kx_vals[1]
@@ -249,206 +292,6 @@ function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{
     end
     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
 end
-
-## only one contour
-# function plt_accumulated_chern_heatmaps(
-#     kx_vals::Vector{Float64}, 
-#     ky_vals::Vector{Float64}, 
-#     cum_chern_per_band::Array{Float64, 3}; 
-#     title::LaTeXString=L"", 
-#     xlabel::LaTeXString=L"k_x",
-#     ylabel::LaTeXString=L"k_y", 
-#     colour=:viridis, 
-#     shift_to_centers::Bool=false,
-#     add_contour::Bool=true,
-#     contour_value_1::Float64=0.5,
-#     contour_value_2::Float64=0.0
-# )
-
-#     dkx = kx_vals[2] - kx_vals[1]
-#     dky = ky_vals[2] - ky_vals[1]
-#     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
-#     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
-
-#     plots = map(1:2) do band_index
-#         cum_transposed = cum_chern_per_band[band_index, :, :]'
-#         min_val = minimum(cum_transposed)
-#         max_val = maximum(cum_transposed)
-#         total_chern = abs(max_val) > abs(min_val) ? round(max_val, digits=4) : round(min_val, digits=4)
-#         sub_title = "Chern number accumulated: " * L"C(E, k_x, k_y)" #L"\\text{Chern number accumulated: } C(E, k_x, k_y)"
-#         p = heatmap(
-#             x_coords, 
-#             y_coords, 
-#             cum_transposed, 
-#             xlabel=xlabel, 
-#             ylabel=ylabel, 
-#             title=sub_title, 
-#             color=colour, 
-#             clims=(min_val, max_val), 
-#             xlims=(-pi, pi), 
-#             ylims=(-pi, pi), 
-#             xticks=pi_ticks, 
-#             yticks=pi_ticks, 
-#             aspect_ratio=:equal, 
-#             colorbar_title=L"C(E, k_x, k_y)"
-#             )
-
-#         # Overlay ± Critical Contour Lines
-#         if add_contour
-#             target_val = abs(contour_value)
-            
-#             # Collect both +val and -val if they exist in the band's value range
-#             levels_to_draw = Float64[]
-#             if min_val <= target_val <= max_val
-#                 push!(levels_to_draw, target_val)
-#             end
-#             if min_val <= -target_val <= max_val
-#                 push!(levels_to_draw, -target_val)
-#             end
-
-#             # Plot contours if any valid targets were found
-#             if !isempty(levels_to_draw)
-#                 contour!(
-#                     p,
-#                     x_coords,
-#                     y_coords,
-#                     cum_transposed,
-#                     levels=levels_to_draw,        # Evaluates +c and/or -c isolines
-#                     color=:white,                 # High-contrast isoline color
-#                     linewidth=1.5,
-#                     linestyle=:solid,
-#                     contour_labels=true,          # Annotates each line with +0.5 or -0.5
-#                     colorbar_entry=false
-#                 )
-#             end
-#         end
-
-#         return p
-
-#     end
-#     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
-# end
-
-# ## two contours
-
-
-# function plt_accumulated_chern_heatmaps(
-#     kx_vals::Vector{Float64}, 
-#     ky_vals::Vector{Float64}, 
-#     cum_chern_per_band::Array{Float64, 3}; 
-#     title::LaTeXString=L"", 
-#     xlabel::LaTeXString=L"k_x",
-#     ylabel::LaTeXString=L"k_y", 
-#     colour=:viridis, 
-#     shift_to_centers::Bool=false,
-#     add_contour::Bool=true,
-#     contour_value_1::Float64=0.5,
-#     contour_value_2::Float64=0.0,
-#     tol::Float64=0.01
-# )
-
-#     dkx = kx_vals[2] - kx_vals[1]
-#     dky = ky_vals[2] - ky_vals[1]
-#     x_coords = shift_to_centers ? (kx_vals .+ dkx / 2) : kx_vals
-#     y_coords = shift_to_centers ? (ky_vals .+ dky / 2) : ky_vals
-
-#     pi_ticks = (
-#         [-π, -π/2, 0, π/2, π],
-#         [L"-\pi", L"-\pi/2", L"0", L"\pi/2", L"\pi"]
-#     )
-
-#     plots = map(1:2) do band_index
-#         cum_transposed = cum_chern_per_band[band_index, :, :]'
-#         min_val = minimum(cum_transposed)
-#         max_val = maximum(cum_transposed)
-#         total_chern = abs(max_val) > abs(min_val) ? round(max_val, digits=4) : round(min_val, digits=4)
-#         sub_title = "Chern number accumulated: " * L"C(E, k_x, k_y)"
-        
-#         p = heatmap(
-#             x_coords, 
-#             y_coords, 
-#             cum_transposed, 
-#             xlabel=xlabel, 
-#             ylabel=ylabel, 
-#             title=sub_title, 
-#             color=colour, 
-#             clims=(min_val, max_val), 
-#             xlims=(-pi, pi), 
-#             ylims=(-pi, pi), 
-#             xticks=pi_ticks, 
-#             yticks=pi_ticks, 
-#             aspect_ratio=:equal, 
-#             colorbar_title=L"C(E, k_x, k_y)"
-#         )
-
-#         # Overlay ± Critical Contour Lines
-#         if add_contour
-#             # Helper: collects valid ± levels and clamps boundary levels slightly inside range
-#             get_levels = val -> begin
-#                 t_val = abs(val)
-#                 candidates = Float64[]
-
-#                 if (min_val - tol) <= t_val <= (max_val + tol)
-#                     push!(candidates, t_val)
-#                 end
-#                 if (min_val - tol) <= -t_val <= (max_val + tol)
-#                     push!(candidates, -t_val)
-#                 end
-
-#                 valid_levels = Float64[]
-#                 eps_shift = 1e-4  # Epsilon to nudge boundary targets into interpolatable range
-
-#                 for lvl in unique(candidates)
-#                     if min_val < max_val
-#                         # Clamp level strictly inside (min_val, max_val)
-#                         clamped_lvl = clamp(lvl, min_val + eps_shift, max_val - eps_shift)
-#                         push!(valid_levels, clamped_lvl)
-#                     end
-#                 end
-
-#                 return unique(valid_levels)
-#             end
-
-#             # Contour 1: Solid White Lines
-#             levels_1 = get_levels(contour_value_1)
-#             if !isempty(levels_1)
-#                 contour!(
-#                     p,
-#                     x_coords,
-#                     y_coords,
-#                     cum_transposed,
-#                     levels=levels_1,
-#                     color=:white,
-#                     linewidth=1.5,
-#                     linestyle=:solid,
-#                     contour_labels=true,
-#                     colorbar_entry=false
-#                 )
-#             end
-
-#             # Contour 2: Dashed Red Lines
-#             levels_2 = get_levels(contour_value_2)
-#             if !isempty(levels_2)
-#                 contour!(
-#                     p,
-#                     x_coords,
-#                     y_coords,
-#                     cum_transposed,
-#                     levels=levels_2,
-#                     color=:red,
-#                     linewidth=1.5,
-#                     linestyle=:dash,
-#                     contour_labels=true,
-#                     colorbar_entry=false
-#                 )
-#             end
-#         end
-
-#         return p
-#     end
-
-#     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
-# end
 
 function plt_accumulated_chern_heatmaps(
     kx_vals::Vector{Float64}, 
