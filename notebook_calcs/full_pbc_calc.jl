@@ -8,6 +8,7 @@ using Statistics
 using LaTeXStrings
 using JLD2: @save, @load
 using Base.Threads
+using Peaks
 
 
 ## Pauli matrices
@@ -1067,8 +1068,464 @@ function plt_joint_band_accumulated_chern_extrema_vs_gamma(
 end
 
 
+function plt_joint_band_cum_chern_vs_energy(
+    gamma_data_pair::Tuple{Real, Any}; 
+    ylims::Union{Nothing, Tuple{Float64, Float64}}=nothing,
+    peak_tol::Float64=0.01,
+    e_cluster_tol::Float64=0.1,
+    flat_span_tol::Float64=0.02
+)
+    gamma, band_data = gamma_data_pair
+    g = Float64(gamma)
+
+    p = plot(
+        xlabel = L"E",
+        ylabel = L"\mathcal{C}(E)",
+        title = "Accumulated Chern Number vs Energy " * L"(\gamma = %$(g))",
+        legend = :best,
+        ylims = (-0.2, 1.01)
+    )
+
+    # 1. Flatten energy and accumulated Chern
+    E_flat = vec(band_data.plaquette_energies)
+    cum_flat = if hasproperty(band_data, :cum_chern_global)
+        vec(band_data.cum_chern_global)
+    elseif hasproperty(band_data, :berry_curvature)
+        b_flat = vec(band_data.berry_curvature) ./ (2π)
+        sort_idx = sortperm(E_flat)
+        cum_sorted = cumsum(b_flat[sort_idx])
+        cum_resorted = similar(cum_sorted)
+        cum_resorted[sort_idx] = cum_sorted
+        cum_resorted
+    else
+        vec(band_data.cum_chern_per_band)
+    end
+
+    # 2. Sort by energy
+    sort_idx = sortperm(E_flat)
+    E_sorted = E_flat[sort_idx]
+    cum_sorted = cum_flat[sort_idx]
+
+    # 3. Plot curve
+    plot!(p, E_sorted, cum_sorted, label = L"\mathcal{C}(E, \gamma=%$(g))", alpha = 0.6)
+
+    # --- 4. Peak Detection via Peaks.jl for candidate local peaks ---
+    pks = findmaxima(cum_sorted)
+    valid_indices = Int[]
+    if !isempty(pks.indices)
+        prom_res = peakproms(pks.indices, cum_sorted)
+        proms = prom_res isa Tuple ? prom_res[2] : (hasproperty(prom_res, :proms) ? prom_res.proms : prom_res)
+
+        range_c = maximum(cum_sorted) - minimum(cum_sorted)
+        valid_indices = pks.indices[proms .>= peak_tol * range_c]
+
+        sort!(valid_indices, by = idx -> cum_sorted[idx], rev = true)
+    end
+
+    # --- Global Maximum (Captures flat top left & right edges) ---
+    c_max_val = maximum(cum_sorted)
+    idx_max_all = findall(v -> abs(v - c_max_val) <= 1e-3, cum_sorted)
+
+    if !isempty(idx_max_all)
+        # Group contiguous index runs (plateaus)
+        max_clusters = Vector{Int}[]
+        curr = [idx_max_all[1]]
+        for idx in idx_max_all[2:end]
+            if idx == curr[end] + 1
+                push!(curr, idx)
+            else
+                push!(max_clusters, curr)
+                curr = [idx]
+            end
+        end
+        push!(max_clusters, curr)
+
+        # Extract left and right boundary indices for flat tops
+        max_boundary_indices = Int[]
+        for cl in max_clusters
+            push!(max_boundary_indices, cl[1]) # Left edge
+            if length(cl) > 1 && abs(E_sorted[cl[end]] - E_sorted[cl[1]]) > 1e-4
+                push!(max_boundary_indices, cl[end]) # Right edge
+            end
+        end
+        unique!(max_boundary_indices)
+
+        for (i, idx) in enumerate(max_boundary_indices)
+            E_max = E_sorted[idx]
+            lbl = if length(max_boundary_indices) == 1
+                L"E(\mathcal{C}_{\text{max}}) = %$(round(E_max, digits=3))"
+            elseif length(max_boundary_indices) == 2 && length(max_clusters) == 1
+                i == 1 ? L"E(\mathcal{C}_{\text{max, left}}) = %$(round(E_max, digits=3))" :
+                         L"E(\mathcal{C}_{\text{max, right}}) = %$(round(E_max, digits=3))"
+            else
+                L"E(\mathcal{C}_{\text{max, %$i}}) = %$(round(E_max, digits=3))"
+            end
+
+            vline!(
+                p, [E_max], linestyle = :dash, color = :red, alpha = 0.7,
+                label = lbl
+            )
+        end
+    end
+
+    # --- Second Local Maximum ---
+    # Filter out any candidates that belong to the global maximum plateau
+    second_max_candidates = filter(idx -> abs(cum_sorted[idx] - c_max_val) > 1e-4, valid_indices)
+    if !isempty(second_max_candidates)
+        idx_2nd = second_max_candidates[1]
+        E_2nd = E_sorted[idx_2nd]
+        vline!(
+            p, [E_2nd], linestyle = :dash, color = :orange, alpha = 0.7,
+            label = L"E(\mathcal{C}_{\text{2nd max}}) = %$(round(E_2nd, digits=3))"
+        )
+    end
+
+    # # --- Global Minimum (Captures flat bottoms & multiple distinct minima) ---
+    # c_min_val = minimum(cum_sorted)
+    # idx_min_all = findall(v -> abs(v - c_min_val) <= 1e-5, cum_sorted)
+
+    # if !isempty(idx_min_all)
+    #     min_clusters = Vector{Int}[]
+    #     curr = [idx_min_all[1]]
+    #     for idx in idx_min_all[2:end]
+    #         if idx == curr[end] + 1
+    #             push!(curr, idx)
+    #         else
+    #             push!(min_clusters, curr)
+    #             curr = [idx]
+    #         end
+    #     end
+    #     push!(min_clusters, curr)
+
+    #     min_boundary_indices = Int[]
+    #     for cl in min_clusters
+    #         push!(min_boundary_indices, cl[1]) # Left edge / 1st minimum
+    #         if length(cl) > 1 && abs(E_sorted[cl[end]] - E_sorted[cl[1]]) > 1e-4
+    #             push!(min_boundary_indices, cl[end]) # Right edge of flat bottom
+    #         end
+    #     end
+    #     unique!(min_boundary_indices)
+
+    #     for (i, idx) in enumerate(min_boundary_indices)
+    #         E_min = E_sorted[idx]
+    #         lbl = if length(min_boundary_indices) == 1
+    #             L"E(\mathcal{C}_{\text{min}}) = %$(round(E_min, digits=3))"
+    #         elseif length(min_boundary_indices) == 2 && length(min_clusters) == 1
+    #             i == 1 ? L"E(\mathcal{C}_{\text{min, left}}) = %$(round(E_min, digits=3))" :
+    #                      L"E(\mathcal{C}_{\text{min, right}}) = %$(round(E_min, digits=3))"
+    #         else
+    #             L"E(\mathcal{C}_{\text{min, %$i}}) = %$(round(E_min, digits=3))"
+    #         end
+
+    #         vline!(
+    #             p, [E_min], linestyle = :dash, color = :blue, alpha = 0.7,
+    #             label = lbl
+    #         )
+    #     end
+    # end
+
+
+    # --- Global Minimum (Grouped by Energy Distance) ---
+    c_min_val = minimum(cum_sorted)
+    idx_min_all = findall(v -> abs(v - c_min_val) <= 1e-5, cum_sorted)
+
+    if !isempty(idx_min_all)
+        # Cluster candidate points by energy gap rather than index gap
+        min_clusters = Vector{Int}[]
+        curr = [idx_min_all[1]]
+        
+        for idx in idx_min_all[2:end]
+            if E_sorted[idx] - E_sorted[curr[end]] <= e_cluster_tol
+                push!(curr, idx)
+            else
+                push!(min_clusters, curr)
+                curr = [idx]
+            end
+        end
+        push!(min_clusters, curr)
+
+        # Extract representative boundaries or center points
+        min_boundary_indices = Int[]
+        for cl in min_clusters
+            e_span = E_sorted[cl[end]] - E_sorted[cl[1]]
+            if e_span > flat_span_tol
+                # Genuine flat bottom plateau: keep both left and right edges
+                push!(min_boundary_indices, cl[1])
+                push!(min_boundary_indices, cl[end])
+            else
+                # Single localized minimum region: pick the middle index
+                push!(min_boundary_indices, cl[div(length(cl) + 1, 2)])
+            end
+        end
+        unique!(min_boundary_indices)
+
+        for (i, idx) in enumerate(min_boundary_indices)
+            E_min = E_sorted[idx]
+            lbl = if length(min_boundary_indices) == 1
+                L"E(\mathcal{C}_{\text{min}}) = %$(round(E_min, digits=3))"
+            elseif length(min_clusters) == 1 && length(min_boundary_indices) == 2
+                i == 1 ? L"E(\mathcal{C}_{\text{min, left}}) = %$(round(E_min, digits=3))" :
+                         L"E(\mathcal{C}_{\text{min, right}}) = %$(round(E_min, digits=3))"
+            else
+                L"E(\mathcal{C}_{\text{min, %$i}}) = %$(round(E_min, digits=3))"
+            end
+
+            vline!(
+                p, [E_min], linestyle = :dash, color = :blue, alpha = 0.7,
+                label = lbl
+            )
+        end
+    end
+
+    # --- 6. Mark C=0 crossing points and boundary zero values ---
+    zero_tol = 1e-3
+    is_zero = abs.(cum_sorted) .<= zero_tol
+    sign_crossings = findall(i -> cum_sorted[i] * cum_sorted[i+1] < 0, 1:(length(cum_sorted)-1))
+    zero_candidates = sort(unique(vcat(findall(is_zero), sign_crossings)))
+
+    zero_indices = Int[]
+    if !isempty(zero_candidates)
+        block_start = zero_candidates[1]
+        prev_idx = zero_candidates[1]
+        
+        for idx in zero_candidates[2:end]
+            if idx > prev_idx + 1
+                push!(zero_indices, block_start)
+                block_start = idx
+            end
+            prev_idx = idx
+        end
+        
+        if prev_idx == length(cum_sorted) && abs(cum_sorted[end]) <= zero_tol
+            push!(zero_indices, length(cum_sorted))
+        else
+            push!(zero_indices, block_start)
+        end
+        unique!(zero_indices)
+    end
+
+    for (i, idx) in enumerate(zero_indices)
+        E_zero = E_sorted[idx]
+        vline!(
+            p, [E_zero],
+            linestyle = :dot, color = :black, alpha = 0.5,
+            label = L"E(\mathcal{C}=0) = %$(round(E_zero, digits=3))"
+        )
+    end
+
+    if !isnothing(ylims)
+        plot!(p, ylims = ylims)
+    end
+
+    return p
+end
+
+# Vector overload: returns an array of plots for multiple pairs
+function plt_joint_band_cum_chern_vs_energy(
+    gamma_data_pairs::Vector{<:Tuple{Real, Any}}; 
+    ylims::Union{Nothing, Tuple{Float64, Float64}}=nothing,
+    peak_tol::Float64=0.01
+)
+    return [plt_joint_band_cum_chern_vs_energy(pair; ylims=ylims, peak_tol=peak_tol) for pair in gamma_data_pairs]
+end
+
+
+function plt_joint_band_smart_extrema_accumulated_chern_energy_vs_gamma(
+    gamma_data_pairs::Vector{<:Tuple{Real, Any}}; 
+    peak_tol::Float64=0.01,
+    e_cluster_tol::Float64=0.1,
+    flat_span_tol::Float64=0.02,
+    zero_tol::Float64=1e-4,
+    ylims::Union{Nothing, Tuple{Float64, Float64}}=nothing
+)
+    # Global buffers to accumulate feature points across all gamma values
+    g_max, e_max = Float64[], Float64[]
+    g_2nd, e_2nd = Float64[], Float64[]
+    g_min, e_min = Float64[], Float64[]
+    g_zero, e_zero = Float64[], Float64[]
+
+    for (gamma, band_data) in gamma_data_pairs
+        g = Float64(gamma)
+
+        # 1. Flatten energy and accumulated Chern
+        E_flat = vec(band_data.plaquette_energies)
+        cum_flat = if hasproperty(band_data, :cum_chern_global)
+            vec(band_data.cum_chern_global)
+        elseif hasproperty(band_data, :berry_curvature)
+            b_flat = vec(band_data.berry_curvature) ./ (2π)
+            sort_idx = sortperm(E_flat)
+            cum_sorted = cumsum(b_flat[sort_idx])
+            cum_resorted = similar(cum_sorted)
+            cum_resorted[sort_idx] = cum_sorted
+            cum_resorted
+        else
+            vec(band_data.cum_chern_per_band)
+        end
+
+        # 2. Sort by energy
+        sort_idx = sortperm(E_flat)
+        E_sorted = E_flat[sort_idx]
+        cum_sorted = cum_flat[sort_idx]
+
+        # --- Peak Detection via Peaks.jl ---
+        pks = findmaxima(cum_sorted)
+        valid_indices = Int[]
+        if !isempty(pks.indices)
+            prom_res = peakproms(pks.indices, cum_sorted)
+            proms = prom_res isa Tuple ? prom_res[2] : (hasproperty(prom_res, :proms) ? prom_res.proms : prom_res)
+
+            range_c = maximum(cum_sorted) - minimum(cum_sorted)
+            valid_indices = pks.indices[proms .>= peak_tol * range_c]
+            sort!(valid_indices, by = idx -> cum_sorted[idx], rev = true)
+        end
+
+        # --- Global Maximum (Captures flat top left & right edges) ---
+        c_max_val = maximum(cum_sorted)
+        idx_max_all = findall(v -> abs(v - c_max_val) <= 1e-3, cum_sorted)
+
+        if !isempty(idx_max_all)
+            max_clusters = Vector{Int}[]
+            curr = [idx_max_all[1]]
+            for idx in idx_max_all[2:end]
+                if idx == curr[end] + 1
+                    push!(curr, idx)
+                else
+                    push!(max_clusters, curr)
+                    curr = [idx]
+                end
+            end
+            push!(max_clusters, curr)
+
+            max_boundary_indices = Int[]
+            for cl in max_clusters
+                push!(max_boundary_indices, cl[1]) # Left edge
+                if length(cl) > 1 && abs(E_sorted[cl[end]] - E_sorted[cl[1]]) > 1e-4
+                    push!(max_boundary_indices, cl[end]) # Right edge
+                end
+            end
+            unique!(max_boundary_indices)
+
+            for idx in max_boundary_indices
+                push!(g_max, g)
+                push!(e_max, E_sorted[idx])
+            end
+        end
+
+        # --- Second Local Maximum ---
+        second_max_candidates = filter(idx -> abs(cum_sorted[idx] - c_max_val) > 1e-4, valid_indices)
+        if !isempty(second_max_candidates)
+            idx_2nd = second_max_candidates[1]
+            push!(g_2nd, g)
+            push!(e_2nd, E_sorted[idx_2nd])
+        end
+
+        # --- Global Minimum (Grouped by Energy Distance) ---
+        c_min_val = minimum(cum_sorted)
+        idx_min_all = findall(v -> abs(v - c_min_val) <= 1e-5, cum_sorted)
+
+        if !isempty(idx_min_all)
+            min_clusters = Vector{Int}[]
+            curr = [idx_min_all[1]]
+            for idx in idx_min_all[2:end]
+                if E_sorted[idx] - E_sorted[curr[end]] <= e_cluster_tol
+                    push!(curr, idx)
+                else
+                    push!(min_clusters, curr)
+                    curr = [idx]
+                end
+            end
+            push!(min_clusters, curr)
+
+            min_boundary_indices = Int[]
+            for cl in min_clusters
+                e_span = E_sorted[cl[end]] - E_sorted[cl[1]]
+                if e_span > flat_span_tol
+                    # Genuine flat bottom: include left and right boundary edges
+                    push!(min_boundary_indices, cl[1])
+                    push!(min_boundary_indices, cl[end])
+                else
+                    # Localized minimum region: pick central point
+                    push!(min_boundary_indices, cl[div(length(cl) + 1, 2)])
+                end
+            end
+            unique!(min_boundary_indices)
+
+            for idx in min_boundary_indices
+                push!(g_min, g)
+                push!(e_min, E_sorted[idx])
+            end
+        end
+
+        # --- Mark C=0 crossing points and boundary zero values ---
+        is_zero = abs.(cum_sorted) .<= zero_tol
+        sign_crossings = findall(i -> cum_sorted[i] * cum_sorted[i+1] < 0, 1:(length(cum_sorted)-1))
+        zero_candidates = sort(unique(vcat(findall(is_zero), sign_crossings)))
+
+        zero_indices = Int[]
+        if !isempty(zero_candidates)
+            block_start = zero_candidates[1]
+            prev_idx = zero_candidates[1]
+            
+            for idx in zero_candidates[2:end]
+                if idx > prev_idx + 1
+                    push!(zero_indices, block_start)
+                    block_start = idx
+                end
+                prev_idx = idx
+            end
+            
+            if prev_idx == length(cum_sorted) && abs(cum_sorted[end]) <= zero_tol
+                push!(zero_indices, length(cum_sorted))
+            else
+                push!(zero_indices, block_start)
+            end
+            unique!(zero_indices)
+        end
+
+        for idx in zero_indices
+            push!(g_zero, g)
+            push!(e_zero, E_sorted[idx])
+        end
+    end
+
+    # Series configurations (Buffers, Label, Color, Shape)
+    series_configs = [
+        (g_max, e_max, L"E(\mathcal{C}_{\text{max}})", :crimson, :star5),
+        (g_2nd, e_2nd, L"E(\mathcal{C}_{\text{2nd max}})", :darkorange, :diamond),
+        (g_min, e_min, L"E(\mathcal{C}_{\text{min}})", :royalblue, :rect),
+        (g_zero, e_zero, L"E(\mathcal{C}=0)", :black, :circle)
+    ]
+
+    p = scatter(
+        xlabel = L"\gamma",
+        ylabel = L"E",
+        title = "Characteristic Chern Energies vs " * L"\gamma",
+        legend = :best
+    )
+
+    for (g_pts, e_pts, lbl, clr, shp) in series_configs
+        if !isempty(g_pts)
+            scatter!(
+                p, g_pts, e_pts,
+                label = lbl,
+                color = clr,
+                markershape = shp,
+                markersize = 4,
+                markerstrokewidth = 0,
+                alpha = 0.7
+            )
+        end
+    end
+
+    if !isnothing(ylims)
+        plot!(p, ylims = ylims)
+    end
+
+    return p
+end
 
 ############################################################################
+
 
  function unpack_saved_data(
     folder_path::String
@@ -1149,11 +1606,11 @@ Computing the PBS bandstructure and its berry curvature for distorted QWZ model
 
 As = [1.0]
 Bs = [1.0]
-ms = [-1.0]
+ms = [-1.9]
 gammas = collect(-3.0:0.1:3.0)
 distortion_type = :symmetric
-Nkx = 301
-Nky = 301
+Nkx = 101
+Nky = 101
 
 data_folder = joinpath("data", "bulk_band_berry_data")
 plot_folder = joinpath("plots", "bulk_band_berry_data")
@@ -1162,7 +1619,8 @@ isdir(plot_folder) || mkpath(plot_folder)
 
 generate_new_data = true
 generate_new_plots = false
-generate_gamma_scatter = true
+generate_gamma_scatter = false
+generate_cum_chern_extrema = false
 
 if generate_new_data
     println("Generating new data...")
@@ -1379,5 +1837,47 @@ if generate_gamma_scatter
         )
 
         savefig(band_extrema_plot, joinpath(plot_folder, "energy_at_joint_band_accumulated_chern_extrema_vs_gamma$(minimum(gammas))-$(maximum(gammas))_A$(A_val)_B$(B_val)_m$(m_val).png"))
+
+        joint_tracking_plot = plt_joint_band_smart_extrema_accumulated_chern_energy_vs_gamma(
+            gamma_data_list; 
+            peak_tol = 0.01,
+            e_cluster_tol = 0.1,
+            flat_span_tol = 0.02,
+            zero_tol = 1e-3
+        )
+
+        savefig(joint_tracking_plot, joinpath(plot_folder, "energy_at_joint_band_accumulated_chern_extrema_and_zero_vs_gamma$(minimum(gammas))-$(maximum(gammas))_A$(A_val)_B$(B_val)_m$(m_val).png"))
+    end
+end
+
+
+if generate_cum_chern_extrema
+    println("Generating cumulative chern line plots with extrema marked...")
+    subfolder = joinpath(plot_folder, "cumulative_chern_extrema")
+    isdir(subfolder) || mkpath(subfolder)
+
+    data_to_unpack = joinpath(data_folder, "bandstrucutre_data")
+
+    for (A, B, m, gamma) in Iterators.product(As, Bs, ms, gammas)
+        filename = "bulk_band_berry_data_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(distortion_type).jld2"
+        filepath = joinpath(data_to_unpack, filename)
+
+        if isfile(filepath)
+            @load filepath data
+
+            band_data = if hasproperty(data, :band)
+                data.band
+            elseif data isa AbstractDict && haskey(data, :band)
+                data[:band]
+            else
+                data
+            end
+
+            # Generate individual plot for this gamma
+            cum_chern_extrema_plt = plt_joint_band_cum_chern_vs_energy((gamma, band_data); peak_tol=0.01)
+
+            out_filename = "cumulative_chern_vs_energy_with_extrema_marked_A$(A)_B$(B)_m$(m)_gamma$(gamma).png"
+            savefig(cum_chern_extrema_plt, joinpath(subfolder, out_filename))
+        end
     end
 end
