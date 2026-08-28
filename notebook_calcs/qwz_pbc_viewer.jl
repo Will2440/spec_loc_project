@@ -69,6 +69,29 @@ app.layout = html_div(style=Dict("display" => "flex", "font-family" => "Arial", 
             dcc_input(id="input-gamma", type="number", value=0.0, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
         end,
 
+        html_hr(style=Dict("margin" => "5px 0", "border" => "none", "borderTop" => "1px solid #ddd")),
+
+        html_div() do
+            html_label("Fermi Energy (E_f)", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
+            dcc_input(id="input-fermi-energy", type="number", value=0.0, step=0.05, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
+        end,
+
+        html_div() do
+            html_label("Show Fermi Surface", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
+            dcc_dropdown(
+                id="dropdown-fermi-mode",
+                options=[
+                    Dict("label" => "None", "value" => "none"),
+                    Dict("label" => "Contour", "value" => "contour"),
+                    Dict("label" => "Mask", "value" => "mask")
+                ],
+                value="none",
+                style=Dict("marginTop" => "4px")
+            )
+        end,
+
+        html_hr(style=Dict("margin" => "5px 0", "border" => "none", "borderTop" => "1px solid #ddd")),
+
         html_div() do
             html_label("Chern crit 1", style=Dict("fontWeight" => "bold", "fontSize" => "14px")),
             dcc_input(id="input-contour_value_1", type="number", value=0.5, step=0.01, style=Dict("width" => "100%", "padding" => "6px", "marginTop" => "4px"))
@@ -130,11 +153,13 @@ callback!(app,
     Input("input-B", "value"),
     Input("input-m", "value"),
     Input("input-gamma", "value"),
+    Input("input-fermi-energy", "value"),
+    Input("dropdown-fermi-mode", "value"),
     Input("input-contour_value_1", "value"),
     Input("input-contour_value_2", "value"),
     Input("input-contour_tol", "value"),
     Input("dropdown-pert", "value")
-) do Nkx, Nky, A, B, m, gamma, contour_value_1, contour_value_2, contour_tol, pert
+) do Nkx, Nky, A, B, m, gamma, fermi_energy, fermi_mode, contour_value_1, contour_value_2, contour_tol, pert
     
     # Guard against invalid or missing input values during typing
     nkx_val = isnothing(Nkx) || Nkx < 2 ? 20 : Int(Nkx)
@@ -143,10 +168,14 @@ callback!(app,
     b_val = isnothing(B) ? 1.0 : Float64(B)
     m_val = isnothing(m) ? 0.0 : Float64(m)
     g_val = isnothing(gamma) ? 0.0 : Float64(gamma)
+    ef_val = isnothing(fermi_energy) ? 0.0 : Float64(fermi_energy)
     c_val_1 = isnothing(contour_value_1) ? 0.5 : Float64(contour_value_1)
     c_val_2 = isnothing(contour_value_2) ? 0.5 : Float64(contour_value_2)
     c_tol = isnothing(contour_tol) ? 0.01 : Float64(contour_tol)
     pert_type = isnothing(pert) ? :none : Symbol(pert)
+
+    show_contour = (fermi_mode == "contour")
+    mask_surface = (fermi_mode == "mask")
 
     # 1. Run the bulk computation
     data = compute_bulk_band_berry_data(
@@ -162,7 +191,14 @@ callback!(app,
     title_str = LaTeXString("\\gamma = $g_val")
     
     # 2. Render plots
-    p1 = plt_bandstructure_heatmap(data.kx_vals, data.ky_vals, data.energies; title=title_str)
+    # p1 = plt_bandstructure_heatmap(data.kx_vals, data.ky_vals, data.energies; title=title_str)
+    p1 = plt_bandstructure_fermi_surface_heatmap(
+        data.kx_vals, data.ky_vals, data.energies; 
+        title=title_str,
+        fermi_energy=ef_val,
+        show_fermi_contour=show_contour,
+        mask_fermi_surface=mask_surface
+    )
     p2 = plt_k_resolved_F_xy_heatmaps(data.kx_vals, data.ky_vals, data.berry_curvature; title=title_str)
     p3 = plt_accumulated_chern_heatmaps(data.kx_vals, data.ky_vals, data.cum_chern_per_band; title=title_str, contour_value_1=c_val_1, contour_value_2=c_val_2, tol=c_tol)
 
@@ -171,4 +207,6 @@ callback!(app,
 end
 
 println("Starting Interactive Dashboard... Open http://127.0.0.1:8050 in your browser.")
+println("To broadcast run this command in new termal: ")
+println("npx localtunnel --port 8050 --subdomain my-qwz-dashboard")
 run_server(app, "0.0.0.0", 8050)
