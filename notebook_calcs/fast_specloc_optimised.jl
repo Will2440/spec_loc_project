@@ -131,11 +131,40 @@ function real_space_perturbed_qwz_blocks(;
     tx = ComplexF64.(-0.5 * B * sigma_z - 0.5im * A * sigma_x)
     ty = ComplexF64.(-0.5 * B * sigma_z - 0.5im * A * sigma_y)
 
-    if perturbation_type == :symmetric
+    # Symmetric perturbations (cosine-like, real scalar)
+    if perturbation_type == :sym_cos_sum || perturbation_type == :symmetric
+        # Symmetric addition: uniform real perturbation
         tx += ComplexF64.(0.5 * gamma * identity_2)
         ty += ComplexF64.(0.5 * gamma * identity_2)
-    elseif perturbation_type == :tilt
+    elseif perturbation_type == :sym_cos_diff
+        # Symmetric difference: different signs in x and y
+        tx += ComplexF64.(0.5 * gamma * identity_2)
+        ty += ComplexF64.(-0.5 * gamma * identity_2)
+    elseif perturbation_type == :sym_cos_add
+        # Combined symmetric: average contribution
+        tx += ComplexF64.(0.25 * gamma * identity_2)
+        ty += ComplexF64.(0.25 * gamma * identity_2)
+    elseif perturbation_type == :sym_cos_sub
+        # Combined symmetric difference
+        tx += ComplexF64.(0.25 * gamma * identity_2)
+        ty += ComplexF64.(-0.25 * gamma * identity_2)
+    # Antisymmetric perturbations (sine-like, imaginary component)
+    elseif perturbation_type == :asym_sin_sum || perturbation_type == :antisymmetric
+        # Antisymmetric addition: imaginary perturbation
         tx += ComplexF64.(0.5im * gamma * identity_2)
+        ty += ComplexF64.(0.5im * gamma * identity_2)
+    elseif perturbation_type == :asym_sin_diff
+        # Antisymmetric difference: opposite imaginary contributions
+        tx += ComplexF64.(0.5im * gamma * identity_2)
+        ty += ComplexF64.(-0.5im * gamma * identity_2)
+    elseif perturbation_type == :asym_sin_add
+        # Combined antisymmetric
+        tx += ComplexF64.(0.25im * gamma * identity_2)
+        ty += ComplexF64.(0.25im * gamma * identity_2)
+    elseif perturbation_type == :asym_sin_sub
+        # Combined antisymmetric difference
+        tx += ComplexF64.(0.25im * gamma * identity_2)
+        ty += ComplexF64.(-0.25im * gamma * identity_2)
     elseif perturbation_type != :none
         error("Unknown perturbation type: $perturbation_type")
     end
@@ -217,66 +246,6 @@ function real_space_perturbed_disordered_hamiltonian_qwz_coo(
     return sparse(Is, Js, Vs, dim, dim)
 end
 
-# Original slow version kept for reference
-function real_space_perturbed_disordered_hamiltonian_qwz(
-    Lx::Int, Ly::Int;
-    A::Real=1.0, B::Real=1.0, m::Real=0.0, gamma::Real=0.0,
-    perturbation_type::Symbol=:none, disorder_type::Symbol=:none, W::Real=0.0,
-    periodic_x::Bool=false, periodic_y::Bool=false, sparse_output::Bool=true
-)
-    onsite_base, tx, ty = real_space_perturbed_qwz_blocks(; A=A, B=B, m=m, gamma=gamma, perturbation_type=perturbation_type)
-    
-    nsites = Lx * Ly
-    dim = 2 * nsites
-    H = sparse_output ? spzeros(ComplexF64, dim, dim) : zeros(ComplexF64, dim, dim)
-
-    function add_block!(mat, row_site::Tuple{Int, Int}, col_site::Tuple{Int, Int}, block::AbstractMatrix{<:Number})
-        (xr, yr) = row_site
-        (xc, yc) = col_site
-        row_base = site_index_qwz(xr, yr, 1, Lx, Ly)
-        col_base = site_index_qwz(xc, yc, 1, Lx, Ly)
-        @inbounds for a in 0:1, b in 0:1
-            mat[row_base + a, col_base + b] += ComplexF64(block[a + 1, b + 1])
-        end
-        return nothing
-    end
-
-    for y in 1:Ly, x in 1:Lx
-        onsite_xy = copy(onsite_base)
-        
-        if W > 0.0
-            random_val = W * (rand() - 0.5)
-            if disorder_type == :anderson
-                onsite_xy += random_val * identity_2
-            elseif disorder_type == :mass
-                onsite_xy += random_val * sigma_z
-            elseif disorder_type != :none
-                error("Unknown disorder type: $disorder_type")
-            end
-        end
-
-        add_block!(H, (x, y), (x, y), onsite_xy)
-
-        if x < Lx
-            add_block!(H, (x + 1, y), (x, y), tx)
-            add_block!(H, (x, y), (x + 1, y), tx')
-        elseif periodic_x
-            add_block!(H, (1, y), (x, y), tx)
-            add_block!(H, (x, y), (1, y), tx')
-        end
-
-        if y < Ly
-            add_block!(H, (x, y + 1), (x, y), ty)
-            add_block!(H, (x, y), (x, y + 1), ty')
-        elseif periodic_y
-            add_block!(H, (x, 1), (x, y), ty)
-            add_block!(H, (x, y), (x, 1), ty')
-        end
-    end
-
-    return H
-end
-
 function fast_low_lying_localiser_spectrum(
     Lxs::AbstractVector{<:Integer}, 
     Lys::AbstractVector{<:Integer}; 
@@ -299,7 +268,9 @@ function fast_low_lying_localiser_spectrum(
     n_lowest_evals::Int=10,
     keep_square::Bool=false,
     sweep_x0y0::Tuple{Bool, Int}=(false, 51),
-    use_coo_assembly::Bool=true  # NEW: Toggle optimized assembly
+    use_coo_assembly::Bool=true,  # NEW: Toggle optimized assembly
+    scale_kappa_to_L::Bool=false,  # NEW: Whether to scale kappa by system size
+    kappa_scales::AbstractVector{<:Real} = [0.0004]  # NEW: Scaling factors for kappa
 )::DataFrame
 
     RowType = NamedTuple{(:A, :B, :m, :gamma, :W, :Lx, :Ly, :x, :y, :E, :kappa, :d, :phi, :low_lying_evals),
@@ -326,7 +297,14 @@ function fast_low_lying_localiser_spectrum(
             y0_vals = [y0_fixed]
         end
 
-        param_grid = collect(Iterators.product(Avals, Bvals, mvals, gammas, Ws, Es, kappas, orbital_displacements, phis, x0_vals, y0_vals))
+        # Determine kappas based on scaling flag
+        effective_kappas = if scale_kappa_to_L
+            [scale * Lx for scale in kappa_scales]
+        else
+            kappas
+        end
+
+        param_grid = collect(Iterators.product(Avals, Bvals, mvals, gammas, Ws, Es, effective_kappas, orbital_displacements, phis, x0_vals, y0_vals))
         n_params = length(param_grid)
         batch_rows = Vector{RowType}(undef, n_params)
 
@@ -397,37 +375,6 @@ function fast_low_lying_localiser_spectrum(
     return DataFrame(all_rows)
 end
 
-# Benchmark function to compare old vs new
-function benchmark_assembly(Lx=20, Ly=20)
-    A, B, m, gamma = 1.0, 1.0, 0.0, 0.5
-    W = 0.5
-    
-    println("\n=== Sparse Matrix Assembly Benchmark ===")
-    
-    # Old method
-    println("Old (element-wise +=) method:")
-    t_old = @elapsed for _ in 1:3
-        H_old = real_space_perturbed_disordered_hamiltonian_qwz(Lx, Ly;
-            A=A, B=B, m=m, gamma=gamma, perturbation_type=:symmetric,
-            disorder_type=:anderson, W=W, sparse_output=true)
-    end
-    t_old /= 3
-    println("  Time per assembly: $(round(t_old*1000, digits=2)) ms")
-    
-    # New method (COO)
-    println("New (COO format) method:")
-    t_new = @elapsed for _ in 1:3
-        H_new = real_space_perturbed_disordered_hamiltonian_qwz_coo(Lx, Ly;
-            A=A, B=B, m=m, gamma=gamma, perturbation_type=:symmetric,
-            disorder_type=:anderson, W=W)
-    end
-    t_new /= 3
-    println("  Time per assembly: $(round(t_new*1000, digits=2)) ms")
-    
-    speedup = t_old / t_new
-    println("\nSpeedup: $(round(speedup, digits=1))x")
-    println("Relative savings: $((1 - t_new/t_old)*100 |> x -> round(x, digits=1))%")
-end
 
 
 
@@ -435,23 +382,23 @@ end
 Avals = [1.0]
 Bvals = [1.0]
 mvals = [-1.0]
-gammavals = [0.5] #collect(0.0:0.01:1.0) #[0.75, 0.5, 1.0, 2.0, 3.0] #collect(0.0:0.1:3.0) #collect(range(0.0, 2.0, 51))
-perturbation_type = :symmetric
+gammavals = collect(-3.0:0.05:3.0) #[0.75, 0.5, 1.0, 2.0, 3.0] #collect(0.0:0.1:3.0) #collect(range(0.0, 2.0, 51))
+perturbation_type = :asym_sin_sum
 embedding_phis = [0.0]
-embedding_ds = [0.0, 1.0, 10.0, 40.0, 50.0]
+embedding_ds = [0.0]#, 1.0, 10.0]
 disorder_type = :none
 Ws = [0.0] #[0.01, 0.1] #collect(range(0.0, 1.0, 51))
 n_disorder_realisations = 1
-Lxs = collect(10:10:100) #[14]
-Lys = collect(10:10:100) #[14]
+Lxs = [20] #collect(10:10:200) #[14]
+Lys = [20] #collect(10:10:200) #[14]
 keep_square = true
 xs = :centre
 ys = :centre
 sweep_x0y0 = (false, 51)
-Es = [1.3] #collect(0.9:0.01:1.5) #collect(range(-1.125, -1.075, length=101))
-kappas = [0.02] #logrange(1e-3, 1e-0, 3) #collect(range(1e-3, 1e-0, 30)) #[2e-1] ## 0.02 works well at L=50
-scale_kappa_to_L = true
-kappa_scales = [0.0004]
+Es = collect(-3.0:0.05:3.0) #collect(range(-1.125, -1.075, length=101))
+kappas = [0.05] #logrange(1e-3, 1e-0, 3) #collect(range(1e-3, 1e-0, 30)) #[2e-1] ## ((0.02 works well at L=50, gives kappa_scales=0.0004))
+scale_kappa_to_L = false
+kappa_scales = [0.0004] ## kappa = kappa_scale * L
 n_lowest_evals = 4
 
 results_df = fast_low_lying_localiser_spectrum(
@@ -463,7 +410,9 @@ results_df = fast_low_lying_localiser_spectrum(
     periodic_x=false, periodic_y=false,
     n_disorder_realisations=n_disorder_realisations,
     n_lowest_evals=n_lowest_evals,
-    keep_square=keep_square
+    keep_square=keep_square,
+    scale_kappa_to_L=scale_kappa_to_L,
+    kappa_scales=kappa_scales
 )
 
 println("Computed spectral localiser DataFrame with $(nrow(results_df)) rows and $(ncol(results_df)) columns.")
