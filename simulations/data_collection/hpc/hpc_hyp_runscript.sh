@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="/user/work/hb21877/SpecLoc_project/spec_loc_project/simulations/data_collection/hpc"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 ROW_INDEX="${SLURM_ARRAY_TASK_ID:-${1:-}}"
