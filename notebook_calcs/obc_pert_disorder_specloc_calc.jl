@@ -320,8 +320,8 @@ end
 
 Avals = [1.0]
 Bvals = [1.0]
-mvals = [-1.0]
-gammavals = collect(range(0.0, 3.0, length=30))
+mvals = [-2.1]
+gammavals = [3.0] #collect(0.0:1.0:3.0) #collect(range(-3.0, 3.0, length=61))
 perturbation_type=:symmetric
 disorder_type = :none # :anderson
 Ws = [0.0] #collect(range(0.0, 6.0, length=31)) #[0.0, 0.01, 0.05, 0.1, 0.25]
@@ -329,8 +329,8 @@ Lx = 14
 Ly = 14
 xs = [Int(Lx/2)] #collect(range(-1, Lx+1, length=25))
 ys = [Int(Ly/2)] #collect(range(-1, Ly+1, length=25))
-Es = collect(range(-5.0, 5.0, length=101))
-kappas = [2e-1]#logrange(1e-3, 5e1, 25)
+Es = collect(range(-2.5, 3.0, length=101))
+kappas = [2e-1] #collect(range(1e-3, 5e-2, 15)) # [2e-1] #logrange(1e-3, 5e1, 25)
 
 println("--------- Computation Parameters: ----------")
 println("Avals: ", minimum(Avals), " - ", length(Avals), " - ", maximum(Avals))

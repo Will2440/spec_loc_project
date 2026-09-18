@@ -15,6 +15,7 @@ export compute_bulk_band_berry_data, plt_bandstructure_heatmap, plt_bandstructur
 export plt_k_resolved_F_xy_heatmaps, plt_accumulated_chern_heatmaps
 export real_space_perturbed_qwz_blocks, real_space_perturbed_hamiltonian_qwz
 export k_space_perturbed_qwz_hamiltonian, unpack_saved_data, debug_accumulation_extrema
+export compute_euler_characteristic, compute_pockets_and_holes, get_energy_at_chern, get_energy_at_chern_2d
 
 
 ## Pauli matrices
@@ -24,82 +25,89 @@ const sigma_z = [1 0; 0 -1]
 const identity = [1 0; 0 1]
 
 pi_ticks = (
-                [-π, -3π/4, -π/2, -π/4, 0, π/4, π/2, 3π/4, π],
-                [L"-\pi", L"-3\pi/4", L"-\pi/2", L"-\pi/4", L"0", L"\pi/4", L"\pi/2", L"3\pi/4", L"\pi"]
-            )
-
-# 1. Unified Block Generator
-function real_space_perturbed_qwz_blocks(; 
-    A::Real=1.0, B::Real=1.0, m::Real=0.0, gamma::Real=0.0, perturbation_type::Symbol=:none
+    [-π, -3π/4, -π/2, -π/4, 0, π/4, π/2, 3π/4, π],
+    [L"-\pi", L"-3\pi/4", L"-\pi/2", L"-\pi/4", L"0", L"\pi/4", L"\pi/2", L"3\pi/4", L"\pi"]
 )
-    onsite = ComplexF64.((m + 2.0 * B) * sigma_z)
-    tx = ComplexF64.(-0.5 * B * sigma_z - 0.5im * A * sigma_x)
-    ty = ComplexF64.(-0.5 * B * sigma_z - 0.5im * A * sigma_y)
 
-    if perturbation_type == :symmetric
-        tx += ComplexF64.(0.5 * gamma * identity)
-        ty += ComplexF64.(0.5 * gamma * identity)
-    elseif perturbation_type == :tilt
-        tx += ComplexF64.(0.5im * gamma * identity)
-    elseif perturbation_type != :none
-        error("Unknown perturbation type: $perturbation_type")
-    end
+# EMBEDDING IMPLEMENTATION TOGGLE (hardcoded for testing)
+# Options: :sigma_z_rotation (current), :orbital_displacement_phase (new)
+const EMBEDDING_TYPE = :sigma_z_rotation
 
-    return onsite, tx, ty
-end
+# # 1. Unified Block Generator
+# function real_space_perturbed_qwz_blocks(; 
+#     A::Real=1.0, B::Real=1.0, m::Real=0.0, gamma::Real=0.0, perturbation_type::Symbol=:none
+# )
+#     onsite = ComplexF64.((m + 2.0 * B) * sigma_z)
+#     tx = ComplexF64.(-0.5 * B * sigma_z - 0.5im * A * sigma_x)
+#     ty = ComplexF64.(-0.5 * B * sigma_z - 0.5im * A * sigma_y)
 
-site_index_qwz(x::Int, y::Int, orb::Int, Lx::Int, Ly::Int) = 2 * ((y - 1) * Lx + (x - 1)) + orb
+#     # Apply generic scalar perturbation to real-space blocks
+#     # (Real-space representation is approximate for k-space-dependent perturbations)
+#     if perturbation_type in (:sym_cos_sum, :sym_cos_diff, :sym_cos_add, :sym_cos_sub)
+#         tx += ComplexF64.(0.5 * gamma * identity)
+#         ty += ComplexF64.(0.5 * gamma * identity)
+#     elseif perturbation_type in (:asym_sin_sum, :asym_sin_diff, :asym_sin_add, :asym_sin_sub)
+#         tx += ComplexF64.(0.5im * gamma * identity)
+#         ty += ComplexF64.(0.5im * gamma * identity)
+#     elseif perturbation_type != :none
+#         error("Unknown perturbation type: $perturbation_type")
+#     end
 
-# 2. Updated Real-Space Hamiltonian Builder
-function real_space_perturbed_hamiltonian_qwz(
-    Lx::Int, Ly::Int; A::Real=1.0, B::Real=1.0, m::Real=0.0, gamma::Real=0.0,
-    perturbation_type::Symbol=:none, periodic_x::Bool=false, periodic_y::Bool=false, sparse_output::Bool=true
-)
-    Lx > 0 || error("Lx must be positive.")
-    Ly > 0 || error("Ly must be positive.")
+#     return onsite, tx, ty
+# end
 
-    onsite, tx, ty = real_space_perturbed_qwz_blocks(; A=A, B=B, m=m, gamma=gamma, perturbation_type=perturbation_type)
-    nsites = Lx * Ly
-    dim = 2 * nsites
-    H = sparse_output ? spzeros(ComplexF64, dim, dim) : zeros(ComplexF64, dim, dim)
+# site_index_qwz(x::Int, y::Int, orb::Int, Lx::Int, Ly::Int) = 2 * ((y - 1) * Lx + (x - 1)) + orb
 
-    function add_block!(mat, row_site::Tuple{Int, Int}, col_site::Tuple{Int, Int}, block::AbstractMatrix{<:Number})
-        (xr, yr) = row_site
-        (xc, yc) = col_site
-        row_base = site_index_qwz(xr, yr, 1, Lx, Ly)
-        col_base = site_index_qwz(xc, yc, 1, Lx, Ly)
-        @inbounds for a in 0:1, b in 0:1
-            mat[row_base + a, col_base + b] += ComplexF64(block[a + 1, b + 1])
-        end
-        return nothing
-    end
+# # 2. Updated Real-Space Hamiltonian Builder
+# function real_space_perturbed_hamiltonian_qwz(
+#     Lx::Int, Ly::Int; A::Real=1.0, B::Real=1.0, m::Real=0.0, gamma::Real=0.0,
+#     perturbation_type::Symbol=:none, periodic_x::Bool=false, periodic_y::Bool=false, sparse_output::Bool=true
+# )
+#     Lx > 0 || error("Lx must be positive.")
+#     Ly > 0 || error("Ly must be positive.")
 
-    for y in 1:Ly, x in 1:Lx
-        add_block!(H, (x, y), (x, y), onsite)
+#     onsite, tx, ty = real_space_perturbed_qwz_blocks(; A=A, B=B, m=m, gamma=gamma, perturbation_type=perturbation_type)
+#     nsites = Lx * Ly
+#     dim = 2 * nsites
+#     H = sparse_output ? spzeros(ComplexF64, dim, dim) : zeros(ComplexF64, dim, dim)
 
-        if x < Lx
-            add_block!(H, (x + 1, y), (x, y), tx)
-            add_block!(H, (x, y), (x + 1, y), tx')
-        elseif periodic_x
-            add_block!(H, (1, y), (x, y), tx)
-            add_block!(H, (x, y), (1, y), tx')
-        end
+#     function add_block!(mat, row_site::Tuple{Int, Int}, col_site::Tuple{Int, Int}, block::AbstractMatrix{<:Number})
+#         (xr, yr) = row_site
+#         (xc, yc) = col_site
+#         row_base = site_index_qwz(xr, yr, 1, Lx, Ly)
+#         col_base = site_index_qwz(xc, yc, 1, Lx, Ly)
+#         @inbounds for a in 0:1, b in 0:1
+#             mat[row_base + a, col_base + b] += ComplexF64(block[a + 1, b + 1])
+#         end
+#         return nothing
+#     end
 
-        if y < Ly
-            add_block!(H, (x, y + 1), (x, y), ty)
-            add_block!(H, (x, y), (x, y + 1), ty')
-        elseif periodic_y
-            add_block!(H, (x, 1), (x, y), ty)
-            add_block!(H, (x, y), (x, 1), ty')
-        end
-    end
+#     for y in 1:Ly, x in 1:Lx
+#         add_block!(H, (x, y), (x, y), onsite)
 
-    return H
-end
+#         if x < Lx
+#             add_block!(H, (x + 1, y), (x, y), tx)
+#             add_block!(H, (x, y), (x + 1, y), tx')
+#         elseif periodic_x
+#             add_block!(H, (1, y), (x, y), tx)
+#             add_block!(H, (x, y), (1, y), tx')
+#         end
+
+#         if y < Ly
+#             add_block!(H, (x, y + 1), (x, y), ty)
+#             add_block!(H, (x, y), (x, y + 1), ty')
+#         elseif periodic_y
+#             add_block!(H, (x, 1), (x, y), ty)
+#             add_block!(H, (x, y), (x, 1), ty')
+#         end
+#     end
+
+#     return H
+# end
 
 function k_space_perturbed_qwz_hamiltonian(
     kx::Real, ky::Real; A::Real=1.0, B::Real=1.0, m::Real=0.0, gamma::Real=0.0,
-    perturbation_type::Symbol=:none, winding_number::Int=0
+    perturbation_type::Symbol=:none, winding_number::Int=0, phi::Real=0.0, orbital_displacement::Real=0.0
 )::Matrix{ComplexF64}
 
     winding_number >= 0 || error("winding_number must be non-negative.")
@@ -109,10 +117,24 @@ function k_space_perturbed_qwz_hamiltonian(
     d_z = m + 2B - B * cos(kx) - B * cos(ky)
     scalar_term = 0.0
 
-    if perturbation_type == :symmetric
+    # Symmetric perturbations (cos variants)
+    if perturbation_type == :sym_cos_sum
         scalar_term += gamma * (cos(kx) + cos(ky))
-    elseif perturbation_type == :tilt
-        scalar_term += gamma * sin(kx)
+    elseif perturbation_type == :sym_cos_diff
+        scalar_term += gamma * (cos(kx) - cos(ky))
+    elseif perturbation_type == :sym_cos_add
+        scalar_term += gamma * cos(kx + ky)
+    elseif perturbation_type == :sym_cos_sub
+        scalar_term += gamma * cos(kx - ky)
+    # Antisymmetric perturbations (sin variants)
+    elseif perturbation_type == :asym_sin_sum
+        scalar_term += gamma * (sin(kx) + sin(ky))
+    elseif perturbation_type == :asym_sin_diff
+        scalar_term += gamma * (sin(kx) - sin(ky))
+    elseif perturbation_type == :asym_sin_add
+        scalar_term += gamma * sin(kx + ky)
+    elseif perturbation_type == :asym_sin_sub
+        scalar_term += gamma * sin(kx - ky)
     elseif perturbation_type != :none
         error("Unknown perturbation type: $perturbation_type")
     end
@@ -124,7 +146,53 @@ function k_space_perturbed_qwz_hamiltonian(
         d_x, d_y = (cos_nkx * d_x - sin_nkx * d_y, cos_nkx * d_y + sin_nkx * d_x)
     end
 
+    # Build Hamiltonian before embedding
     H_k = scalar_term * identity + d_x * sigma_x + d_y * sigma_y + d_z * sigma_z
+
+    # Apply orbital embedding based on selected implementation
+    if abs(orbital_displacement) > 1e-14
+        dx_phi = orbital_displacement * cos(phi)
+        dy_phi = orbital_displacement * sin(phi)
+        
+        if EMBEDDING_TYPE == :sigma_z_rotation
+            # ============================================
+            # IMPLEMENTATION 1: σ_z basis rotation
+            # Applies: U(k) = exp(-i*θ*σ_z) where θ = k·d
+            # Rotates d-vector in (d_x, d_y) plane by angle θ
+            # ============================================
+            theta = kx * dx_phi + ky * dy_phi
+            cos_theta = cos(theta)
+            sin_theta = sin(theta)
+            
+            # Extract current d-vector components
+            d_x_current = d_x
+            d_y_current = d_y
+            
+            # Apply rotation: (d_x, d_y) -> (d_x*cos(θ) - d_y*sin(θ), d_x*sin(θ) + d_y*cos(θ))
+            d_x_rot = cos_theta * d_x_current - sin_theta * d_y_current
+            d_y_rot = sin_theta * d_x_current + cos_theta * d_y_current
+            
+            # Rebuild with rotated components
+            H_k = scalar_term * identity + d_x_rot * sigma_x + d_y_rot * sigma_y + d_z * sigma_z
+            
+        elseif EMBEDDING_TYPE == :orbital_displacement_phase
+            # ============================================
+            # IMPLEMENTATION 2: Orbital displacement phase
+            # Applies phase factor exp(i*k·d) to encode 
+            # physical orbital position difference
+            # ============================================
+            phase = kx * dx_phi + ky * dy_phi
+            phase_factor = exp(im * phase)
+            
+            # Apply phase to entire Hamiltonian
+            # This encodes the orbital displacement through k-dependent gauge
+            H_k = phase_factor * H_k
+            
+        else
+            error("Unknown EMBEDDING_TYPE: $EMBEDDING_TYPE")
+        end
+    end
+
     return ComplexF64.(H_k)
 end
 
@@ -136,7 +204,7 @@ function compute_bulk_band_berry_data(; Nkx::Int=101, Nky::Int=101, kwargs...)
     energies = zeros(Float64, nbands, Nkx, Nky)
     eigenvectors = Array{ComplexF64}(undef, 2, nbands, Nkx, Nky)
 
-    k_space_kwargs = (; [k => v for (k, v) in pairs(kwargs) if k ∈ (:A, :B, :m, :gamma, :perturbation_type, :winding_number)]...)
+    k_space_kwargs = (; [k => v for (k, v) in pairs(kwargs) if k ∈ (:A, :B, :m, :gamma, :perturbation_type, :winding_number, :phi, :orbital_displacement)]...)
 
     for (ix, kx) in enumerate(kx_vals), (iy, ky) in enumerate(ky_vals)
         spectrum = eigen(Hermitian(k_space_perturbed_qwz_hamiltonian(kx, ky; k_space_kwargs...)))
@@ -203,8 +271,9 @@ end
 
 function plt_bandstructure_heatmap(kx_vals::Vector{Float64}, ky_vals::Vector{Float64}, energies::Array{Float64, 3}; title::LaTeXString=L"", xlabel::LaTeXString=L"k_x", ylabel::LaTeXString=L"k_y", colour=:curl, share_colour_scale::Bool=false)
     c_limits = share_colour_scale ? extrema(energies[1:2, :, :]) : :auto
-    plt_band1 = heatmap(kx_vals, ky_vals, energies[1, :, :], xlabel=xlabel, ylabel=ylabel, title="Bandstrucutre (Band 1 Lower)", xlims=(-pi, pi), ylims=(-pi, pi), xticks=pi_ticks, yticks=pi_ticks, color=colour, clims=c_limits, colorbar_title=L"E(k_x, k_y)", aspect_ratio=:equal)
-    plt_band2 = heatmap(kx_vals, ky_vals, energies[2, :, :], xlabel=xlabel, ylabel=ylabel, title="Bandstrucutre (Band 2 Upper)", xlims=(-pi, pi), ylims=(-pi, pi), xticks=pi_ticks, yticks=pi_ticks, color=colour, clims=c_limits, colorbar_title=L"E(k_x, k_y)", aspect_ratio=:equal)
+    # FIXED: Add transpose to match contour and other heatmap functions (Plots.jl expects z[i,j] at (x[j], y[i]))
+    plt_band1 = heatmap(kx_vals, ky_vals, energies[1, :, :]', xlabel=xlabel, ylabel=ylabel, title="Bandstrucutre (Band 1 Lower)", xlims=(-pi, pi), ylims=(-pi, pi), xticks=pi_ticks, yticks=pi_ticks, color=colour, clims=c_limits, colorbar_title=L"E(k_x, k_y)", aspect_ratio=:equal)
+    plt_band2 = heatmap(kx_vals, ky_vals, energies[2, :, :]', xlabel=xlabel, ylabel=ylabel, title="Bandstrucutre (Band 2 Upper)", xlims=(-pi, pi), ylims=(-pi, pi), xticks=pi_ticks, yticks=pi_ticks, color=colour, clims=c_limits, colorbar_title=L"E(k_x, k_y)", aspect_ratio=:equal)
     return plot(plt_band1, plt_band2, layout=(1, 2), size=(1600, 600))
 end
 
@@ -226,7 +295,9 @@ function plt_bandstructure_fermi_surface_heatmap(
 
     # Create masked energy arrays: values > fermi_energy become NaN
     b1_data = mask_fermi_surface ? ifelse.(energies[1, :, :] .<= fermi_energy, energies[1, :, :], NaN) : energies[1, :, :]
+    b1_data = b1_data'  # FIXED: Transpose to match Plots.jl convention and contour overlay
     b2_data = mask_fermi_surface ? ifelse.(energies[2, :, :] .<= fermi_energy, energies[2, :, :], NaN) : energies[2, :, :]
+    b2_data = b2_data'  # FIXED: Transpose to match Plots.jl convention and contour overlay
 
     # Band 1 Plot
     plt_band1 = plot(background_color_subplot=:gray80, aspect_ratio=:equal)
@@ -251,7 +322,18 @@ function plt_bandstructure_fermi_surface_heatmap(
     return plot(plt_band1, plt_band2, layout=(1, 2), size=(1600, 600))
 end
 
-function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{Float64}, berry_curvature::Array{Float64, 3}; title::LaTeXString=L"", xlabel::LaTeXString=L"k_x", ylabel::LaTeXString=L"k_y", colour=:RdBu, shift_to_centers::Bool=false, share_colour_scale::Bool=false)
+function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{Float64}, berry_curvature::Array{Float64, 3}; 
+    title::LaTeXString=L"", 
+    xlabel::LaTeXString=L"k_x", 
+    ylabel::LaTeXString=L"k_y", 
+    colour=:RdBu, 
+    shift_to_centers::Bool=false, 
+    share_colour_scale::Bool=false,
+    energies::Union{Array{Float64, 3}, Nothing}=nothing,
+    fermi_energy::Real=0.0,
+    show_fermi_contour::Bool=false,
+    mask_fermi_surface::Bool=false
+)
     chern_density = berry_curvature ./ (2π)
     dkx = kx_vals[2] - kx_vals[1]
     dky = ky_vals[2] - ky_vals[1]
@@ -272,10 +354,29 @@ function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{
 
         total_chern = round(sum(density_b), digits=4)
         sub_title = "Flux k-resolved: " * L"F_{xy} / 2\pi \ C = %$(total_chern)" #L"\\text{Flux k-resolved: } F_{xy} / 2\pi C = %$(total_chern))"
-        heatmap(
+        
+        # Apply fermi surface masking if requested
+        display_data = density_b
+        if mask_fermi_surface && !isnothing(energies)
+            display_data = ifelse.(energies[band_index, :, :] .<= fermi_energy, density_b, NaN)
+        end
+        
+        ##################################################################
+        # Calculate direct sum of flux in masked region (for diagnostic purposes)
+        masked_flux_sum = 0.0
+        for i in eachindex(display_data)
+            if !isnan(display_data[i])
+                masked_flux_sum += display_data[i]
+            end
+        end
+        masked_flux_sum = round(masked_flux_sum, digits=4)
+        ##################################################################
+
+        p = plot(background_color_subplot=:gray80, aspect_ratio=:equal)
+        heatmap!(p,
             x_coords, 
             y_coords, 
-            density_b', 
+            display_data', 
             xlabel=xlabel, 
             ylabel=ylabel, 
             title=sub_title, 
@@ -288,7 +389,21 @@ function plt_k_resolved_F_xy_heatmaps(kx_vals::Vector{Float64}, ky_vals::Vector{
             yticks=pi_ticks, 
             aspect_ratio=:equal, 
             colorbar_title=L"F_{xy}(k_x, k_y) / 2\pi"
-            )
+        )
+        
+        ##################################################################
+        # Annotate direct flux sum in center of plot
+        if mask_fermi_surface
+            annotate!(p, (0.5, 0.5), text(L"∑F = %$(masked_flux_sum)", 12, :center, :black))
+        end
+        ##################################################################
+
+        # Add fermi contour if requested
+        if show_fermi_contour && !isnothing(energies)
+            contour!(p, x_coords, y_coords, energies[band_index, :, :]', levels=[fermi_energy], color=:steelblue, linewidth=2.0)
+        end
+        
+        return p
     end
     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
 end
@@ -398,5 +513,175 @@ function plt_accumulated_chern_heatmaps(
 
     return plot(plots[1], plots[2], layout=(1, 2), size=(1600, 600))
 end
+
+# Euler Characteristic Computation Functions
+function compute_euler_characteristic(
+    M::AbstractMatrix{Bool}; 
+    periodic::Bool=true
+)
+    """
+    Computes the Euler characteristic χ = V - E + F on a 2D lattice mask M 
+    for the occupied Fermi sea (E(k) <= E_F).
+    Uses the standard topological formula: χ = V (vertices) - E (edges) + F (faces)
+    """
+    Nx, Ny = size(M)
+    V = count(M)
+    Eh, Ev, F = 0, 0, 0
+
+    for j in 1:Ny, i in 1:Nx
+        if M[i, j]
+            i_next = (periodic && i == Nx) ? 1 : i + 1
+            j_next = (periodic && j == Ny) ? 1 : j + 1
+
+            # Count horizontal edges (occupied-to-unoccupied transitions in i direction)
+            if j_next <= Ny && M[i, j_next]
+                Eh += 1
+            end
+            # Count vertical edges (occupied-to-unoccupied transitions in j direction)
+            if i_next <= Nx && M[i_next, j]
+                Ev += 1
+            end
+            # Count 2x2 faces/plaquettes (fully occupied 2x2 blocks)
+            if i_next <= Nx && j_next <= Ny && M[i_next, j] && M[i, j_next] && M[i_next, j_next]
+                F += 1
+            end
+        end
+    end
+
+    return V - (Eh + Ev) + F
+end
+
+function compute_pockets_and_holes(M::AbstractMatrix{Bool}; periodic::Bool=true)
+    Nx, Ny = size(M)
+    chi = compute_euler_characteristic(M; periodic=periodic)
+    
+    visited = fill(false, Nx, Ny)
+    n_pockets = 0
+
+    # 4-neighbor direction offsets
+    dirs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+    for j in 1:Ny, i in 1:Nx
+        if M[i, j] && !visited[i, j]
+            # BFS to find connected components (pockets)
+            queue = [(i, j)]
+            visited[i, j] = true
+
+            while !isempty(queue)
+                (ci, cj) = popfirst!(queue)
+                for (di, dj) in dirs
+                    ni = ci + di
+                    nj = cj + dj
+                    
+                    if periodic
+                        # Use mod1 for 1-based periodic indexing
+                        ni = mod1(ni, Nx)
+                        nj = mod1(nj, Ny)
+                    else
+                        if ni < 1 || ni > Nx || nj < 1 || nj > Ny
+                            continue
+                        end
+                    end
+
+                    if M[ni, nj] && !visited[ni, nj]
+                        visited[ni, nj] = true
+                        push!(queue, (ni, nj))
+                    end
+                end
+            end
+            
+            n_pockets += 1
+        end
+    end
+
+    n_holes = n_pockets - chi
+    return n_pockets, n_holes
+end
+
+"""
+    get_energy_at_chern(energies::Vector, chern_values::Vector, target_chern::Float64) -> Float64
+
+    Find the energy corresponding to a given accumulated Chern value using linear interpolation.
+    Returns NaN if target_chern is outside the range of chern_values.
+
+    Arguments:
+    - energies: Sorted energy values
+    - chern_values: Cumulative Chern values corresponding to energies
+    - target_chern: Target accumulated Chern value to find
+
+    Returns:
+    - Interpolated energy at the target Chern value, or NaN if outside range
+"""
+function get_energy_at_chern(energies::Vector, chern_values::Vector, target_chern::Float64)
+    if isempty(energies) || isempty(chern_values)
+        return NaN
+    end
+    
+    min_chern = minimum(chern_values)
+    max_chern = maximum(chern_values)
+    
+    # Check if target is outside range
+    if target_chern < min_chern || target_chern > max_chern
+        return NaN
+    end
+    
+    # Find the two indices where chern_values brackets target_chern
+    idx = searchsortedlast(chern_values, target_chern)
+    
+    if idx == 0
+        return energies[1]
+    elseif idx == length(chern_values)
+        return energies[end]
+    else
+        # Linear interpolation between idx and idx+1
+        c1, c2 = chern_values[idx], chern_values[idx + 1]
+        e1, e2 = energies[idx], energies[idx + 1]
+        
+        # Avoid division by zero
+        if abs(c2 - c1) < 1e-14
+            return e1
+        end
+        
+        # Linear interpolation: E = E1 + (target - C1) * (E2 - E1) / (C2 - C1)
+        return e1 + (target_chern - c1) * (e2 - e1) / (c2 - c1)
+    end
+end
+
+# Extract energy from 2D contour (robust to non-monotonic C(E) curves)
+function get_energy_at_chern_2d(energies_2d::AbstractMatrix, chern_2d::AbstractMatrix, target_chern::Float64; tol::Float64=0.02)
+    """
+    Extract energy from 2D C(E,k) heatmap by finding contour points where C ≈ target_chern.
+    
+    Args:
+        energies_2d: 2D matrix of energies at each k-point [Nkx, Nky]
+        chern_2d: 2D matrix of accumulated Chern at each k-point [Nkx, Nky]
+        target_chern: Target Chern value to find
+        tol: Tolerance for contour matching (default 0.02)
+    
+    Returns:
+        Median energy of all k-points where |C - target| < tol, or NaN if insufficient points
+    """
+    if isempty(energies_2d) || isempty(chern_2d)
+        return NaN
+    end
+    
+    # Find all k-points within tolerance of target Chern value
+    contour_energies = Float64[]
+    
+    for i in eachindex(chern_2d)
+        if abs(chern_2d[i] - target_chern) < tol
+            push!(contour_energies, energies_2d[i])
+        end
+    end
+    
+    # Need at least 3 points to be confident about the contour
+    if length(contour_energies) < 3
+        return NaN
+    end
+    
+    # Return median energy (robust to outliers)
+    return median(contour_energies)
+end
+
 
 end # end module

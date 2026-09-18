@@ -1120,9 +1120,9 @@ end
 Lx = 50
 As = [1.0]  # collect(1.0:0.5:3.0)
 Bs = [1.0] # collect(1.0:0.5:3.0)
-ms = [-1.0, -0.5, -1.5] # collect(0.5:0.5:1.0) #[-1.0] #[-2.0:0.5:0.0]
+ms = [-1.0] #collect(0.0:0.5:3.0) #[-1.0] #[-2.0:0.5:0.0]
 B_ys = [1.0] #collect(1.0:0.1:2.0)
-gammas = collect(0.0:1.0:2.0) # 0.5, 1.0, 2.0, 3.0]
+gammas = collect(3.0:0.5:6.0) # 0.5, 1.0, 2.0, 3.0]
 winding_numbers = [0] #collect(0:1:2)
 perturbation_type = :symmetric
 perturb_x = false
@@ -1147,7 +1147,7 @@ edge_sites = max(2, cld(Lx, 10))
     
     ribbon_data = compute_ribbon_spectrum_and_ipr(
         Lx;
-        N_ky=101,
+        N_ky=401,
         edge_sites=edge_sites,
         kwargs...
     )
@@ -1219,7 +1219,7 @@ edge_sites = max(2, cld(Lx, 10))
     #     colour=:plasma
     # )
 
-    folder_name = joinpath("plots", "ribbon_spectrum", "test")
+    folder_name = joinpath("plots", "ribbon_spectrum", "B1.0")
     isdir(folder_name) || mkpath(folder_name)
     savefig(plt1, joinpath(folder_name, "ribbon_spectrum_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(perturbation_type)_B_y$(B_y)_winding_$(winding_num)_ipr.png"))
     savefig(plt2, joinpath(folder_name, "ribbon_spectrum_A$(A)_B$(B)_m$(m)_gamma$(gamma)_perturbation_$(perturbation_type)_B_y$(B_y)_winding_$(winding_num)_berry_curv.png"))

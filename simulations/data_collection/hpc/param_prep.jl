@@ -16,7 +16,7 @@ Bs = collect(0.5:0.5:3.0)
 ms = collect(-5.0:0.5:1.0) #[-1.0, -2.0]
 B_ys = [1.0]
 
-perturbation_types = [:symmetric, :tilt]  # :none, :symmetric, :tilt
+perturbation_types = [:symmetric]  # :none, :symmetric, :tilt
 disorder_types = [:none] # :none, :anderson, :mass
 boundary_cond_twists = [0]
 

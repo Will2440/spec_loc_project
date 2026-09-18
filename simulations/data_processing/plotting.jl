@@ -660,6 +660,20 @@ function plot_specloc_cuts!(index_rows, meta, run_id, case_file, out_dir, axes, 
     W_ref = Ws[iW_ref]
     k_ref = kappas[ik_ref]
 
+    # Optional gamma reference override for lazy interactive selection.
+    g_ref_env = get(ENV, "SPECLOC_SIGGAP_G_REF", "")
+    if !isempty(strip(g_ref_env))
+        g_try = try
+            parse(Float64, g_ref_env)
+        catch
+            NaN
+        end
+        if isfinite(g_try)
+            ig_ref = argmin(abs.(Float64.(gammas) .- g_try))
+            g_ref = gammas[ig_ref]
+        end
+    end
+
     # signature and log(gap) vs E
     sig_slice = vec(sig[ig_ref, iW_ref, ik_ref, :])
     gap_slice = vec(gap[ig_ref, iW_ref, ik_ref, :])
