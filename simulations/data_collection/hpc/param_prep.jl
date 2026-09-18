@@ -33,7 +33,7 @@ kappa_vals = [2e-1]          # used when scale_kappa_to_L = false
 n_disorder_realisations = 1  # >1 only meaningful when disorder_type != :none and W > 0
 
 scale_kappa_to_L = false
-kappa_scales     = [0.0004]  # effective κ = scale × Lx_obc when scale_kappa_to_L = true
+kappa_scales     = [0.0004]  # effective κ = scale / Lx_obc when scale_kappa_to_L = true
 
 orbital_displacements = [0.0]
 phis                  = [0.0]

@@ -400,8 +400,8 @@ function fast_low_lying_localiser_spectrum(
     keep_square::Bool=false,
     sweep_x0y0::Tuple{Bool, Int}=(false, 51),
     use_coo_assembly::Bool=true,  # NEW: Toggle optimized assembly
-    scale_kappa_to_L::Bool=false,  # NEW: Whether to scale kappa by system size
-    kappa_scales::AbstractVector{<:Real} = [0.0004]  # NEW: Scaling factors for kappa
+    scale_kappa_to_L::Bool=false,  # NEW: Whether to scale kappa inversely with system size
+    kappa_scales::AbstractVector{<:Real} = [0.0004]  # NEW: Scaling factors for kappa (κ = scale/L)
 )::DataFrame
 
     RowType = NamedTuple{(:A, :B, :m, :gamma, :W, :Lx, :Ly, :x, :y, :E, :kappa, :d, :phi, :low_lying_evals),
@@ -430,7 +430,7 @@ function fast_low_lying_localiser_spectrum(
 
         # Determine kappas based on scaling flag
         effective_kappas = if scale_kappa_to_L
-            [scale * Lx for scale in kappa_scales]
+            [scale / Lx for scale in kappa_scales]
         else
             kappas
         end
@@ -730,7 +730,7 @@ function fast_low_lying_localiser_spectrum_with_chern(
 
         # Determine kappas based on scaling flag
         effective_kappas = if scale_kappa_to_L
-            [scale * Lx for scale in kappa_scales]
+            [scale / Lx for scale in kappa_scales]
         else
             kappas
         end
@@ -886,7 +886,7 @@ sweep_x0y0 = (false, 51)
 Es = [1.3] #collect(-3.0:0.05:3.0) #collect(range(-1.125, -1.075, length=101))
 kappas = [0.2] #logrange(1e-3, 1e-0, 3) #collect(range(1e-3, 1e-0, 30)) #[2e-1] ## ((0.02 works well at L=50, gives kappa_scales=0.0004))
 scale_kappa_to_L = true
-kappa_scales = [0.0004] ## kappa = kappa_scale * L
+kappa_scales = [0.0004] ## kappa = kappa_scale / L
 n_lowest_evals = 4
 
 results_df = fast_low_lying_localiser_spectrum_with_chern(

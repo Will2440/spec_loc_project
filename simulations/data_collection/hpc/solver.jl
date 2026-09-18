@@ -55,7 +55,7 @@ Base.@kwdef struct SolverCaseConfig
     # Disorder averaging (ignored when disorder_type==:none or W==0)
     n_disorder_realisations::Int = 1
 
-    # Kappa scaling: if true, effective κ = kappa_scales[i] × Lx_obc
+    # Kappa scaling: if true, effective κ = kappa_scales[i] / Lx_obc
     scale_kappa_to_L::Bool        = false
     kappa_scales::Vector{Float64} = [0.0004]
 
@@ -268,7 +268,7 @@ end
 
 function run_case(cfg::SolverCaseConfig)
     kappas = cfg.scale_kappa_to_L ?
-        [s * Float64(cfg.Lx_obc) for s in cfg.kappa_scales] : cfg.kappa_vals
+        [s / Float64(cfg.Lx_obc) for s in cfg.kappa_scales] : cfg.kappa_vals
 
     gammas = cfg.gamma_vals;  Ws = cfg.W_vals;  Es = cfg.E_vals
     ng, nW, nk, nE = length(gammas), length(Ws), length(kappas), length(Es)

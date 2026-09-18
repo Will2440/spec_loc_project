@@ -7,7 +7,7 @@ Key improvements over `hpc_legacy/`:
 - **New perturbation types**: `:sym_cos_sum/diff/add/sub`, `:asym_sin_sum/diff/add/sub`, `:tilt` (legacy)
 - **Orbital sublattice embedding**: `orbital_displacement` and `phi` parameters shift the position operators used in the spectral localiser
 - **Disorder averaging**: `n_disorder_realisations` averages spectral localiser over independent disorder realisations
-- **Kappa scaling**: `scale_kappa_to_L` sets κ = scale × L_x for finite-size robustness
+- **Kappa scaling**: `scale_kappa_to_L` sets κ = scale / L_x for finite-size robustness
 - **Fast sparse solver**: LDLt (Sylvester's law) for signature; KrylovKit shift-and-invert for gap/spectrum slices
 - **COO Hamiltonian assembly**: sparse build with correct diagonal hopping terms for `_add/_sub` types
 
@@ -32,7 +32,7 @@ Key improvements over `hpc_legacy/`:
 | `orbital_displacement` | Float64 | `0.0` | Sublattice position offset magnitude `d` for X, Y operators |
 | `phi` | Float64 | `0.0` | Sublattice displacement angle φ (radians) |
 | `n_disorder_realisations` | Int | `1` | Number of disorder samples to average over (ignored when W=0) |
-| `scale_kappa_to_L` | Bool | `false` | If true, κ = `kappa_scales[i] × Lx_obc` |
+| `scale_kappa_to_L` | Bool | `false` | If true, κ = `kappa_scales[i] / Lx_obc` |
 | `kappa_scales` | Vector{Float64} | `[0.0004]` | Scale factors when `scale_kappa_to_L=true` |
 
 ---
