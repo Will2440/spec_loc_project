@@ -18,68 +18,68 @@ ms = [-1.0] #collect(-5.0:0.5:1.0)
 # Available perturbation types:
 #   :none, :sym_cos_sum, :sym_cos_diff, :sym_cos_add, :sym_cos_sub,
 #   :asym_sin_sum, :asym_sin_diff, :asym_sin_add, :asym_sin_sub, :tilt
-perturbation_types = [:sym_cos_sum]
+perturbation_types = [:sym_cos_diff]
 
 # Available disorder types: :none, :anderson, :mass
-disorder_types = [:none]
+disorder_types = [:anderson]
 
-Lx_obcs = [20]
-Ly_obcs = [20]
+Lx_obcs = [100]
+Ly_obcs = [100]
 
-gamma_vals = collect(-3.0:0.5:3.0)
-W_vals     = [0.0]
-kappa_vals = [2e-1]          # used when scale_kappa_to_L = false
+gamma_vals = [0.0] #collect(-3.0:0.5:3.0)
+W_vals = [1.0]
+kappa_vals = [2e-2] # used when scale_kappa_to_L = false
 
-n_disorder_realisations = 1  # >1 only meaningful when disorder_type != :none and W > 0
+n_disorder_realisations = 100  # >1 only meaningful when disorder_type != :none and W > 0
 
 scale_kappa_to_L = false
 kappa_scales     = [0.0004]  # effective κ = scale × Lx_obc when scale_kappa_to_L = true
 
 orbital_displacements = [0.0]
-phis                  = [0.0]
+phis = [0.0]
 
-energy_range_mode       = :dynamic_band   # :fixed or :dynamic_band
-fixed_E_vals            = collect(range(-5.0, 5.0; length=101))
-energy_points           = 51
+energy_range_mode = :fixed   # :fixed or :dynamic_band
+fixed_E_vals = [0.0] #collect(range(-5.0, 5.0; length=101))
+energy_points = 51
 energy_margin_fraction  = 0.10
-energy_scan_nk          = 11
+energy_scan_nk = 11
 dynamic_energy_split_cases = true
 
 # Spectral localiser placement mode
 # Modes: :manual, :all, :all_plus_outside, :centre_point, :centre_region,
 #        :mid_edge_point_x/y, :mid_edge_region_x/y,
 #        :corner_point_00/01/10/11, :corner_region_00/01/10/11
-specloc_mode              = :centre_point
-specloc_x                 = 7
-specloc_y                 = 7
-specloc_resolution_x      = 1
-specloc_resolution_y      = 1
-specloc_outside_fraction  = 0.10
-specloc_centre_fraction   = 0.30
+specloc_mode = :centre_point
+specloc_x = 7
+specloc_y = 7
+specloc_resolution_x = 1
+specloc_resolution_y = 1
+specloc_outside_fraction = 0.10
+specloc_centre_fraction = 0.30
 specloc_mid_edge_fraction = 0.30
-specloc_corner_fraction   = 0.20
+specloc_corner_fraction = 0.20
 
 seed = 1234
 
-allocation_mode       = :target_rows   # :explicit_vals_per_row or :target_rows
+allocation_mode = :target_rows   # :explicit_vals_per_row or :target_rows
 target_number_of_rows = 200
 
-dynamic_energy_split_cases_active      = dynamic_energy_split_cases
+dynamic_energy_split_cases_active = dynamic_energy_split_cases
 dynamic_split_disabled_for_target_rows = false
 if allocation_mode == :target_rows && dynamic_energy_split_cases_active
-    dynamic_energy_split_cases_active      = false
+    dynamic_energy_split_cases_active = false
     dynamic_split_disabled_for_target_rows = true
 end
 
 # Used when allocation_mode == :explicit_vals_per_row
-A_vals_per_row     = max(1, length(As))
-B_vals_per_row     = max(1, length(Bs))
-m_vals_per_row     = max(1, length(ms))
+A_vals_per_row = max(1, length(As))
+B_vals_per_row = max(1, length(Bs))
+m_vals_per_row = max(1, length(ms))
 gamma_vals_per_row = max(1, length(gamma_vals))
-W_vals_per_row     = max(1, length(W_vals))
+W_vals_per_row = max(1, length(W_vals))
 kappa_axis_per_row = max(1, length(scale_kappa_to_L ? kappa_scales : kappa_vals))
-d_vals_per_row     = max(1, length(orbital_displacements))
-phi_vals_per_row   = max(1, length(phis))
+d_vals_per_row = max(1, length(orbital_displacements))
+phi_vals_per_row = max(1, length(phis))
 
 split_mode = :contiguous   # :contiguous or :roundrobin
 
