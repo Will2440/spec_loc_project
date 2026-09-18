@@ -1,123 +1,101 @@
 # HPC Batch Runner Scripts
 
-## local_runscript.sh (Local Testing)
+## Overview
 
-Run **all rows** from a parameter .dat file in **parallel** on your laptop/local machine.
+This folder contains the updated HPC-compatible spectral localiser pipeline for the QWZ model.
+Key improvements over `hpc_legacy/`:
+- **New perturbation types**: `:sym_cos_sum/diff/add/sub`, `:asym_sin_sum/diff/add/sub`, `:tilt` (legacy)
+- **Orbital sublattice embedding**: `orbital_displacement` and `phi` parameters shift the position operators used in the spectral localiser
+- **Disorder averaging**: `n_disorder_realisations` averages spectral localiser over independent disorder realisations
+- **Kappa scaling**: `scale_kappa_to_L` sets κ = scale × L_x for finite-size robustness
+- **Fast sparse solver**: LDLt (Sylvester's law) for signature; KrylovKit shift-and-invert for gap/spectrum slices
+- **COO Hamiltonian assembly**: sparse build with correct diagonal hopping terms for `_add/_sub` types
 
-### Usage
+---
 
+## Files
+
+| File | Purpose |
+|------|---------|
+| `param_prep.jl` | Generates `.dat` parameter files with full new parameter set |
+| `main.jl` | Runs one row: `julia main.jl <row_index> [params_file]` |
+| `solver.jl` | `SpecLocSolver` module — all physics computations |
+| `local_runscript.sh` | Parallel local testing (all rows via xargs) |
+| `hpc_runscript.sh` | SLURM job array runner (one row per task) |
+
+---
+
+## New Parameters (columns 31–35 in .dat)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `orbital_displacement` | Float64 | `0.0` | Sublattice position offset magnitude `d` for X, Y operators |
+| `phi` | Float64 | `0.0` | Sublattice displacement angle φ (radians) |
+| `n_disorder_realisations` | Int | `1` | Number of disorder samples to average over (ignored when W=0) |
+| `scale_kappa_to_L` | Bool | `false` | If true, κ = `kappa_scales[i] × Lx_obc` |
+| `kappa_scales` | Vector{Float64} | `[0.0004]` | Scale factors when `scale_kappa_to_L=true` |
+
+---
+
+## Perturbation Types
+
+| Symbol | k-space scalar term |
+|--------|-------------------|
+| `:none` | 0 |
+| `:sym_cos_sum` | γ(cos kx + cos ky) |
+| `:sym_cos_diff` | γ(cos kx − cos ky) |
+| `:sym_cos_add` | γ cos(kx + ky) — uses diagonal hoppings |
+| `:sym_cos_sub` | γ cos(kx − ky) — uses diagonal hoppings |
+| `:asym_sin_sum` | γ(sin kx + sin ky) |
+| `:asym_sin_diff` | γ(sin kx − sin ky) |
+| `:asym_sin_add` | γ sin(kx + ky) — uses diagonal hoppings |
+| `:asym_sin_sub` | γ sin(kx − ky) — uses diagonal hoppings |
+| `:tilt` | −γ sin kx (legacy) |
+| `:symmetric` | alias for `:sym_cos_sum` |
+
+---
+
+## Quick Start
+
+### Local testing
 ```bash
 cd simulations/data_collection/hpc
 
-# Auto-detect newest .dat file and number of cores
+# 1. Generate parameter file
+julia --startup-file=no param_prep.jl
+
+# 2. Run all rows in parallel (auto-detects cores)
 ./local_runscript.sh
 
-# Specific .dat file, auto-detect cores
-./local_runscript.sh param_sets/params_20260814_152612_explicit_Eauto_rows16.dat
-
-# Specific .dat file and number of parallel jobs
-./local_runscript.sh param_sets/params_20260814_152612_explicit_Eauto_rows16.dat 4
+# 3. Or specify file and parallelism
+./local_runscript.sh param_sets/params_*.dat 4
 ```
 
-### Features
-
-- **Parallel execution**: Automatically detects CPU cores and runs multiple rows simultaneously
-- **Auto job distribution**: Uses xargs `-P` for parallel row dispatch
-- **Fallback support**: Falls back to sequential if parallel tools unavailable
-- **Output tagging**: Each row's output is prefixed with `[Row N]` for clarity
-- **Progress tracking**: Prints total rows and parallel job count before starting
-- **Shared run folder**: One local launch writes all row outputs into a single `results/<run_id>/` folder
-
-### Example
-
+### HPC (SLURM)
 ```bash
-# Run all 16 rows with 4 parallel jobs
-./local_runscript.sh param_sets/params_20260814_152612_explicit_Eauto_rows16.dat 4
+# Edit SCRIPT_DIR and account in hpc_runscript.sh, then:
+sbatch --array=1-<N_rows> hpc_runscript.sh param_sets/params_*.dat
 ```
 
-Output shows rows running concurrently, with row/chunk-tagged files written into one shared run directory.
-
----
-
-## runscript.sh (HPC Job Array)
-
-Run a **single row** for use in HPC job arrays (SLURM, PBS, etc.)
-
-### Usage
-
+### Process results
 ```bash
-# Direct invocation
-cd simulations/data_collection/hpc
-./runscript.sh 1 params_file.dat
-./runscript.sh 5
-
-# SLURM job array
-sbatch --array=1-16 runscript.sh params_file.dat
-```
-
-### Features
-
-- **Single-row execution**: Each invocation runs exactly one row
-- **SLURM integration**: Automatically detects `SLURM_ARRAY_TASK_ID` for job arrays
-- **Auto params detection**: Falls back to newest .dat file if not specified
-- **Lightweight**: No threading overhead; one core per job
-
-### Example SLURM Script
-
-Create `submit_batch.sh`:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=specloc_batch
-#SBATCH --array=1-16
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
-#SBATCH --time=01:00:00
-#SBATCH --output=results/slurm-%A_%a.log
-
-cd simulations/data_collection/hpc
-./runscript.sh params_file.dat
-```
-
-Submit with:
-```bash
-sbatch submit_batch.sh
+cd simulations/data_processing
+julia main.jl   # uses newest results/ dir by default
 ```
 
 ---
 
-## Key Differences
+## Julia Dependencies
 
-| Aspect | local_runscript.sh | runscript.sh |
-|--------|-------------------|--------------|
-| **Execution** | All rows in parallel | Single row per call |
-| **Use case** | Local testing on laptop | HPC batch submission |
-| **Parallelism** | Uses all available cores | One core per job |
-| **Output** | Interleaved with row tags | Sequential, single result |
-| **Job control** | Shell script | SLURM/PBS array-friendly |
+`solver.jl` requires **KrylovKit** in addition to stdlib packages.
+Install once in the target Julia environment:
+```julia
+import Pkg; Pkg.add("KrylovKit")
+```
+All other dependencies (`LinearAlgebra`, `SparseArrays`, `Statistics`, `Random`) are stdlib.
 
 ---
 
-## Workflow
+## Legacy Reference
 
-1. **Local testing**:
-   ```bash
-   ./local_runscript.sh param_sets/params_small_test.dat
-   ```
-
-2. **After validation, submit to HPC**:
-   ```bash
-   sbatch --array=1-256 runscript.sh param_sets/params_large_run.dat
-   ```
-
-3. **Process results**:
-   ```bash
-   cd ../../../simulations/data_processing
-   julia main.jl  # Uses newest results dir by default
-   ```
-
-4. **Visualize**:
-   ```bash
-   python3 useful_scripts/qwz_plt_viewer.py
-   ```
+The original scripts (without new perturbation types or sparse solver) are preserved unchanged in `hpc_legacy/`.

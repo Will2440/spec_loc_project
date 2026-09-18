@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=SpecLoc_QWZ
+#SBATCH --job-name=SpecLoc_QWZ_noW
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=compute
@@ -7,7 +7,7 @@
 #SBATCH --account=phys030424
 #SBATCH --array=1-200
 #SBATCH --time=05:00:00
-#SBATCH --mem=2G
+#SBATCH --mem=1G
 
 set -euo pipefail
 
@@ -34,8 +34,5 @@ fi
 module add languages/julia || true
 export JULIA_DEPOT_PATH="/user/work/hb21877/.julia"
 export JULIA_NUM_THREADS=1
-
-# KrylovKit must be installed in the Julia depot. First-time setup:
-#   julia -e 'import Pkg; Pkg.add("KrylovKit")'
 
 julia --startup-file=no "$SCRIPT_DIR/main.jl" "$ROW_INDEX" "$PARAMS_FILE"
