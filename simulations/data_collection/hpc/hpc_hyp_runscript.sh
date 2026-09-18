@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --partition=general
 #SBATCH --cpus-per-task=1
-#SBATCH --account=phys030424
+#SBATCH --account=caiger
 #SBATCH --array=1-1
 #SBATCH --time=01:00:00
 #SBATCH --mem=5G
