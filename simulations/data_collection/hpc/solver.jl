@@ -5,6 +5,7 @@ module SpecLocSolver
 using LinearAlgebra
 using SparseArrays
 using Random
+using Printf
 using KrylovKit
 
 export SolverCaseConfig, run_case
@@ -13,6 +14,12 @@ const SIGMA_X = ComplexF64[0 1; 1 0]
 const SIGMA_Y = ComplexF64[0 -im; im 0]
 const SIGMA_Z = ComplexF64[1 0; 0 -1]
 const ID2     = ComplexF64[1 0; 0 1]
+
+# =====================================================================
+# Utility functions
+# =====================================================================
+
+format_dur(s) = let t=max(0,round(Int,s)); @sprintf("%02d:%02d:%02d",t÷3600,(t%3600)÷60,t%60) end
 
 # =====================================================================
 # Config
@@ -239,6 +246,7 @@ function low_lying_spectrum(
 )::Vector{Float64}
     sz   = size(L, 1)
     nreq = min(n, sz)
+    
     for attempt in 0:1
         Leff = attempt == 0 ? L : L + reg*I(sz)
         try
@@ -257,9 +265,17 @@ function low_lying_spectrum(
             attempt == 1 && break
         end
     end
-    @warn "low_lying_spectrum: all sparse methods failed; using dense eigvals (sz=$sz)"
+    
+    # FALLBACK: Dense computation (indicates numerical issues with sparse methods)
+    @printf("\n⚠️  [SLOW-FALLBACK] Dense eigvals for sz=%d (sparse LU/eigsolve failed)\n", sz)
+    flush(stdout)
+    t0 = time()
     evs = real.(eigvals(Hermitian(Matrix(L))))
-    return sort(evs, by=abs)[1:min(nreq, length(evs))]
+    t1 = time()
+    result = sort(evs, by=abs)[1:min(nreq, length(evs))]
+    @printf("⚠️  [SLOW-FALLBACK] Dense eigvals took %.2fs\n\n", t1-t0)
+    flush(stdout)
+    return result
 end
 
 # =====================================================================
@@ -299,23 +315,43 @@ function run_case(cfg::SolverCaseConfig)
     n_gap  = cfg.compute_specloc_gap ? cfg.n_gap_eigenpairs : 0
     I_sp   = sparse(I, D, D)
 
+    @printf("\n[INIT] System size: L=(%d,%d) D=%d, disorder=%s W=%.3f n_real=%d\n",
+            cfg.Lx_obc, cfg.Ly_obc, D, cfg.disorder_type, cfg.W_vals[1], cfg.n_disorder_realisations)
+    flush(stdout)
+
+    total_chunks = ng * nW
+    chunk_idx = 0
+    t_chunk_start = time()
+
     for gi in 1:ng, wi in 1:nW
+        chunk_idx += 1
         gamma = gammas[gi];  W = Ws[wi]
         sig_sum = zeros(Float64, nk, nE)
         gap_sum = zeros(Float64, nk, nE)
 
         actual_real = (W == 0.0 || cfg.disorder_type == :none) ? 1 : n_real
+        t_real_start = time()
 
         for r in 1:actual_real
             seed_r = cfg.seed == 0 ? 0 :
                      cfg.seed + ((gi-1)*nW + (wi-1))*max(n_real,1) + (r-1)
             rng_r  = seed_r == 0 ? Random.default_rng() : MersenneTwister(seed_r)
 
+            t_ham = time()
             H_r = build_hamiltonian(cfg.Lx_obc, cfg.Ly_obc;
                     A=cfg.A, B=cfg.B, m=cfg.m, gamma=gamma,
                     perturbation_type=cfg.perturbation_type,
                     disorder_type=cfg.disorder_type, W=W, rng=rng_r)
-
+            t_ham_done = time()
+            
+            t_sig = 0.0
+            t_eig = 0.0
+            n_eig_called = 0
+            
+            # Progress tracking for single-realisation runs
+            t_last_progress = t_ham_done
+            progress_interval = max(1, cld(nE, 10))  # Report every ~10% of energies
+            
             for ei in 1:nE
                 Hsh = H_r - ComplexF64(Es[ei]) * I_sp
 
@@ -328,11 +364,16 @@ function run_case(cfg::SolverCaseConfig)
                     need_κ = r==1 && gi==ig0 && wi==iW0 && ei==iE0 && !isassigned(spectrum_vs_kappa, ki)
                     n_eig  = max(n_gap, (need_γ || need_W || need_κ) ? n_spec : 0)
 
+                    t_s = time()
                     sig = signature_ldlt(Lherm)
+                    t_sig += time() - t_s
                     sig_sum[ki, ei] += sig
 
                     if n_eig > 0
+                        t_e = time()
                         evals = low_lying_spectrum(L; n=n_eig)
+                        t_eig += time() - t_e
+                        n_eig_called += 1
                         n_gap > 0 && (gap_sum[ki, ei] += minimum(abs.(evals)))
                         sl = evals[1:min(n_spec, length(evals))]
                         need_γ && (spectrum_vs_gamma[gi]  = sl)
@@ -340,8 +381,40 @@ function run_case(cfg::SolverCaseConfig)
                         need_κ && (spectrum_vs_kappa[ki]  = sl)
                     end
                 end
+                
+                # Log progress for single-realisation runs (every progress_interval energies)
+                if actual_real == 1 && mod(ei, progress_interval) == 0
+                    t_now = time()
+                    t_elapsed = t_now - t_ham_done
+                    t_per_energy = t_elapsed / ei
+                    t_remaining = t_per_energy * (nE - ei)
+                    @printf("  [E %d/%d] real %d/%d: %.1fs elapsed, ~%.1fs remaining (%.2fs/E)\n",
+                            ei, nE, r, actual_real, t_elapsed, t_remaining, t_per_energy)
+                    flush(stdout)
+                    t_last_progress = t_now
+                end
+            end
+            
+            # Log timing breakdown for this realisation
+            t_real_done = time()
+            if actual_real > 1
+                @printf("  [real %d/%d] H_build=%.2fs sig=%.2fs eig(%d)=%.2fs total_real=%.2fs\n",
+                        r, actual_real, t_ham_done-t_ham, t_sig, n_eig_called, t_eig, t_real_done-t_real_start)
+                flush(stdout)
+            elseif r == actual_real  # Log final summary for single-realisation case
+                @printf("  [real 1/1] H_build=%.2fs sig=%.2fs eig(%d)=%.2fs total_real=%.2fs\n",
+                        t_ham_done-t_ham, t_sig, n_eig_called, t_eig, t_real_done-t_real_start)
+                flush(stdout)
             end
         end
+
+        # Log progress for this chunk (works for any actual_real)
+        t_chunk_done = time()
+        dt_chunk = t_chunk_done - t_real_start
+        eta_chunk = (total_chunks - chunk_idx) * dt_chunk
+        @printf("[Chunk %d/%d] γ=%.3f W=%.3f, %d real(s) in %.1fs | ETA=%s\n",
+                chunk_idx, total_chunks, gamma, W, actual_real, dt_chunk, format_dur(eta_chunk))
+        flush(stdout)
 
         for ei in 1:nE, ki in 1:nk
             rsig = round(Int, sig_sum[ki, ei] / actual_real)

@@ -101,7 +101,19 @@ function newest_params_file()
 end
 
 resolve_run_id(ri) = let e = strip(get(ENV,"SPECLOC_RUN_ID",""))
-    isempty(e) ? Dates.format(now(),"yyyymmdd_HHMMSS")*"_r$ri" : e
+    if !isempty(e)
+        return e
+    else
+        # Include SLURM job ID if running on HPC
+        job_id = strip(get(ENV,"SLURM_ARRAY_JOB_ID",""))
+        array_task = strip(get(ENV,"SLURM_ARRAY_TASK_ID",""))
+        ts = Dates.format(now(),"yyyymmdd_HHMMSS")
+        if !isempty(job_id)
+            return "job_$(job_id)_task_$(array_task)_$(ts)_r$ri"
+        else
+            return ts*"_r$ri"
+        end
+    end
 end
 
 format_dur(s) = let t=max(0,round(Int,s)); @sprintf("%02d:%02d:%02d",t÷3600,(t%3600)÷60,t%60) end
@@ -123,6 +135,7 @@ function run_row(row_index::Int, params_path::String)
 
     total = length(row.As)*length(row.Bs)*length(row.ms)*length(row.gamma_vals)
     println("Row $row_index: chunks=$total  pt=$(row.perturbation_type)  dt=$(row.disorder_type)  n_real=$(row.n_disorder_realisations)  scale_κ=$(row.scale_kappa_to_L)  d=$(row.orbital_displacement)  φ=$(row.phi)")
+    flush(stdout)
 
     ci = 0;  t0 = time();  tlast = t0;  tcum = 0.0
 

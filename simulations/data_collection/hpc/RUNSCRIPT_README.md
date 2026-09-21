@@ -74,7 +74,7 @@ julia --startup-file=no param_prep.jl
 ### HPC (SLURM)
 ```bash
 # Edit SCRIPT_DIR and account in hpc_runscript.sh, then:
-sbatch --array=1-<N_rows> hpc_runscript.sh param_sets/params_*.dat
+sbatch --array=1-<N_rows> runscripts/hpc_runscript.sh param_sets/params_*.dat
 ```
 
 ### Process results
