@@ -21,16 +21,16 @@ ms = [-1.0] #collect(-5.0:0.5:1.0)
 perturbation_types = [:sym_cos_diff]
 
 # Available disorder types: :none, :anderson, :mass
-disorder_types = [:anderson]
+disorder_types = [:none]
 
 Lx_obcs = [100]
 Ly_obcs = [100]
 
 gamma_vals = [0.0] #collect(-3.0:0.5:3.0)
-W_vals = [1.0]
-kappa_vals = [2e-2] # used when scale_kappa_to_L = false
+W_vals = [0.0]
+kappa_vals = kappa_vals = 10 .^ range(-6, -1, length=50) # used when scale_kappa_to_L = false
 
-n_disorder_realisations = 100  # >1 only meaningful when disorder_type != :none and W > 0
+n_disorder_realisations = 10  # >1 only meaningful when disorder_type != :none and W > 0
 
 scale_kappa_to_L = false
 kappa_scales     = [0.0004]  # effective κ = scale / Lx_obc when scale_kappa_to_L = true
@@ -61,7 +61,7 @@ specloc_corner_fraction = 0.20
 
 seed = 1234
 
-allocation_mode = :target_rows   # :explicit_vals_per_row or :target_rows
+allocation_mode = :explicit_vals_per_row   # :explicit_vals_per_row or :target_rows
 target_number_of_rows = 200
 
 dynamic_energy_split_cases_active = dynamic_energy_split_cases
@@ -345,6 +345,9 @@ for A_chunk  in A_chunks,
         gamma_group in gamma_groups, d in d_chunk, phi in phi_chunk,
         (sx, sy) in pts
 
+        # Enforce n_disorder_realisations=1 if no disorder or W=0
+        n_real_effective = (disorder_type == :none || all(W .== 0.0 for W in W_chunk)) ? 1 : n_disorder_realisations
+
         push!(rows, (
             As=A_group, Bs=B_group, ms=m_group,
             perturbation_type=perturbation_type, disorder_type=disorder_type,
@@ -355,7 +358,7 @@ for A_chunk  in A_chunks,
             fixed_E_vals=fixed_E_vals,
             specloc_x=sx, specloc_y=sy, seed=seed,
             orbital_displacement=d, phi=phi,
-            n_disorder_realisations=n_disorder_realisations,
+            n_disorder_realisations=n_real_effective,
             scale_kappa_to_L=scale_kappa_to_L, kappa_scales=kappa_scales_row,
         ))
     end
