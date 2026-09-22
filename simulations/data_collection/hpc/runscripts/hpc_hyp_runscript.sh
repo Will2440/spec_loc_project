@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=SpecLoc
+#SBATCH --job-name=SpecLoc_symcosdiff_gsampled
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=general
 #SBATCH --qos=regular
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-1
-#SBATCH --time=00:30:00
+#SBATCH --time=24:00:00
 #SBATCH --mem=24G
 
 set -euo pipefail

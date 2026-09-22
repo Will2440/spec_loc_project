@@ -21,16 +21,16 @@ ms = [-1.0] #collect(-5.0:0.5:1.0)
 perturbation_types = [:sym_cos_diff]
 
 # Available disorder types: :none, :anderson, :mass
-disorder_types = [:none]
+disorder_types = [:anderson]
 
 Lx_obcs = [100]
 Ly_obcs = [100]
 
-gamma_vals = [0.0] #collect(-3.0:0.5:3.0)
-W_vals = [0.0]
-kappa_vals = kappa_vals = 10 .^ range(-6, -1, length=50) # used when scale_kappa_to_L = false
+gamma_vals = [0.0, 0.5, 1.0, 1.5, 2.0] #collect(0.0:0.05:1.5)
+W_vals = collect(range(0.0, 5.0; length=101))
+kappa_vals = kappa_vals = [1e-3] #10 .^ range(-6, -1, length=50) # used when scale_kappa_to_L = false
 
-n_disorder_realisations = 10  # >1 only meaningful when disorder_type != :none and W > 0
+n_disorder_realisations = 100  # >1 only meaningful when disorder_type != :none and W > 0
 
 scale_kappa_to_L = false
 kappa_scales     = [0.0004]  # effective κ = scale / Lx_obc when scale_kappa_to_L = true
@@ -39,7 +39,7 @@ orbital_displacements = [0.0]
 phis = [0.0]
 
 energy_range_mode = :fixed   # :fixed or :dynamic_band
-fixed_E_vals = [0.0] #collect(range(-5.0, 5.0; length=101))
+fixed_E_vals = collect(range(0.0, 3.0; length=51))
 energy_points = 51
 energy_margin_fraction  = 0.10
 energy_scan_nk = 11
@@ -75,8 +75,8 @@ end
 A_vals_per_row = max(1, length(As))
 B_vals_per_row = max(1, length(Bs))
 m_vals_per_row = max(1, length(ms))
-gamma_vals_per_row = max(1, length(gamma_vals))
-W_vals_per_row = max(1, length(W_vals))
+gamma_vals_per_row = 1 #max(1, length(gamma_vals))
+W_vals_per_row = 3 #max(1, length(W_vals))
 kappa_axis_per_row = max(1, length(scale_kappa_to_L ? kappa_scales : kappa_vals))
 d_vals_per_row = max(1, length(orbital_displacements))
 phi_vals_per_row = max(1, length(phis))
@@ -274,7 +274,12 @@ specloc_pts_per_geo = sum(
 )
 
 fixed_outer_combos     = length(perturbation_types) * length(disorder_types)
-rows_per_chunk_product = fixed_outer_combos * specloc_pts_per_geo
+
+# Estimate chunks per row (before creating actual chunks)
+# Use the vals_per_row we'll compute to estimate the chunk product
+est_chunk_product = A_vals_per_row * B_vals_per_row * m_vals_per_row * gamma_vals_per_row *
+                    W_vals_per_row * kappa_axis_per_row * d_vals_per_row * phi_vals_per_row
+est_rows_per_chunk_product = est_chunk_product * fixed_outer_combos * specloc_pts_per_geo
 
 if allocation_mode == :explicit_vals_per_row
     vals_per_row[:A]     = A_vals_per_row
@@ -287,7 +292,7 @@ if allocation_mode == :explicit_vals_per_row
     vals_per_row[:phi]   = phi_vals_per_row
 elseif allocation_mode == :target_rows
     n_chunks = choose_chunk_counts(chunk_lengths,
-                   ceil(Int, target_number_of_rows / max(1, rows_per_chunk_product)))
+                   ceil(Int, target_number_of_rows / max(1, est_rows_per_chunk_product)))
     for k in keys(chunk_lengths)
         vals_per_row[k] = ceil(Int, chunk_lengths[k] / n_chunks[k])
     end
@@ -303,6 +308,21 @@ W_chunks     = chunk_vector(W_vals,              vals_per_row[:W];     mode=spli
 kappa_chunks = chunk_vector(kappa_axis,          vals_per_row[:kappa]; mode=split_mode)
 d_chunks     = chunk_vector(orbital_displacements, vals_per_row[:d];   mode=split_mode)
 phi_chunks   = chunk_vector(phis,                vals_per_row[:phi];   mode=split_mode)
+
+# Calculate typical chunk sizes for combinations per row
+avg_A_per_chunk     = ceil(Int, length(As) / length(A_chunks))
+avg_B_per_chunk     = ceil(Int, length(Bs) / length(B_chunks))
+avg_m_per_chunk     = ceil(Int, length(ms) / length(m_chunks))
+avg_gamma_per_chunk = ceil(Int, length(gamma_vals) / length(gamma_chunks))
+avg_W_per_chunk     = ceil(Int, length(W_vals) / length(W_chunks))
+avg_kappa_per_chunk = ceil(Int, length(kappa_axis) / length(kappa_chunks))
+avg_d_per_chunk     = ceil(Int, length(orbital_displacements) / length(d_chunks))
+avg_phi_per_chunk   = ceil(Int, length(phis) / length(phi_chunks))
+
+# Combinations per row: product of all parameter dimensions
+chunk_product       = avg_A_per_chunk * avg_B_per_chunk * avg_m_per_chunk * avg_gamma_per_chunk *
+                      avg_W_per_chunk * avg_kappa_per_chunk * avg_d_per_chunk * avg_phi_per_chunk
+rows_per_chunk_product = chunk_product * fixed_outer_combos * specloc_pts_per_geo
 
 # =====================================================================
 # Build rows
@@ -415,6 +435,7 @@ println("Rows:            $(length(rows))")
 allocation_mode == :target_rows &&
     println("Target / nbrs:   $(target_number_of_rows)  lower=$(nearest_lower)  upper=$(nearest_upper)")
 println("Allocation:      $allocation_mode  |  Split: $split_mode  |  Energy: $energy_range_mode")
+
 println("--------------------------------------------------------")
 println("Parameter ranges (min–max–count):")
 for (lbl, v) in [("A",As),("B",Bs),("m",ms),("gamma",gamma_vals),("W",W_vals),
@@ -441,4 +462,10 @@ if energy_range_mode == :dynamic_band
 else
     println("Energy: fixed [$(minimum(fixed_E_vals)), $(maximum(fixed_E_vals))]  pts=$(length(fixed_E_vals))")
 end
+println("========================================================")
+total_combos_per_row = chunk_product * energy_points * length(perturbation_types) * length(disorder_types) * specloc_pts_per_geo * n_disorder_realisations
+println("Combinations/row (total): $total_combos_per_row")
+println("  = (A:$avg_A_per_chunk × B:$avg_B_per_chunk × m:$avg_m_per_chunk × γ:$avg_gamma_per_chunk × W:$avg_W_per_chunk × κ:$avg_kappa_per_chunk × d:$avg_d_per_chunk × φ:$avg_phi_per_chunk)")
+println("    × E:$energy_points × perturb:$(length(perturbation_types)) × disorder:$(length(disorder_types)) × specloc:$specloc_pts_per_geo")
+println("    × n_realisations:$n_disorder_realisations")
 println("========================================================\n")
