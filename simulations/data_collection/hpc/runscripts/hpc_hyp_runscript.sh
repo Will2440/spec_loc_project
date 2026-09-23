@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=SpecLoc_symcosdiff_gsampled
+#SBATCH --job-name=SpecLoc_symcosdiff_gres
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=general

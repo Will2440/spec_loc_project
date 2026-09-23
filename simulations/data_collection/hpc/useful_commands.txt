@@ -1,0 +1,3 @@
+Displays available resource limits nicely:
+$ sacctmgr show qos format=Name,MaxWall,MaxJobsPU,MaxNodesPerJob,MaxCpusPerJob
+

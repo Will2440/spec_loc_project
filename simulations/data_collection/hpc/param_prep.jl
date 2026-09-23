@@ -26,9 +26,9 @@ disorder_types = [:anderson]
 Lx_obcs = [100]
 Ly_obcs = [100]
 
-gamma_vals = [0.0, 0.5, 1.0, 1.5, 2.0] #collect(0.0:0.05:1.5)
-W_vals = collect(range(0.0, 5.0; length=101))
-kappa_vals = kappa_vals = [1e-3] #10 .^ range(-6, -1, length=50) # used when scale_kappa_to_L = false
+gamma_vals = collect(0.0:0.125:1.0) #collect(-2.0:0.01:2.0)
+W_vals = 10 .^range(0.0, 10.0; length=101) #collect(range(0.0, 5.0; length=101))
+kappa_vals = kappa_vals = [1e-3] #10 .^ range(-4, -1, length=50) #[1e-3] # used when scale_kappa_to_L = false
 
 n_disorder_realisations = 100  # >1 only meaningful when disorder_type != :none and W > 0
 
@@ -75,7 +75,7 @@ end
 A_vals_per_row = max(1, length(As))
 B_vals_per_row = max(1, length(Bs))
 m_vals_per_row = max(1, length(ms))
-gamma_vals_per_row = 1 #max(1, length(gamma_vals))
+gamma_vals_per_row = 2 #max(1, length(gamma_vals))
 W_vals_per_row = 3 #max(1, length(W_vals))
 kappa_axis_per_row = max(1, length(scale_kappa_to_L ? kappa_scales : kappa_vals))
 d_vals_per_row = max(1, length(orbital_displacements))
